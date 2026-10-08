@@ -1,6 +1,6 @@
 # Spec 06 — Clinic Pharmacy Tool: Index, Decisions, Open Questions
 
-**Status:** **Rev 6.1 (standalone)**, 2026-10-08, on branch `docs/spec-06-rev4-standalone` of `clinic-pharmacy-tool`. **Milestone 1 is being built** (§5).
+**Status:** **Rev 6.2 (standalone)**, 2026-10-08, on branch `docs/spec-06-rev4-standalone` of `clinic-pharmacy-tool`. **Milestone 1 is being built** (§5).
 **Written against:** clinic-pharmacy-tool `origin/main` @ `6f5ffb2` (fetched 2026-10-08; README only, no code). Stack conventions from Ritu Desk `origin/main` @ `8bee594` (fetched 2026-10-08; no newer commits).
 **History:** Revisions 4–6 were squashed into one commit when this repo's history was cleaned on 2026-10-08; the revision notes say what each changed. Earlier drafts, from when this was planned as a Ritu Desk module, are kept privately.
 
@@ -97,6 +97,24 @@
 | D-42 | **Stock-count corrections, including adding found stock, move into Milestone 1.** Supplier returns stay in Milestone 2. Supersedes R6-4. | §5; 06a §19 (PR 10); 06b §30 |
 | D-43 | **Repo hygiene.** Confirm the repo's visibility before every push. Never put client names, patient data, security findings or infrastructure details in this repo; incident notes live only in the private Ritu Desk repo. The history was cleaned on 2026-10-08. | `CLAUDE.md` |
 | D-44 | **Review cadence.** PR 1 is approved; PR 2 is reviewed on its own; after that, three PRs between reviews. | §5 |
+
+### Round 8 (founder review of PR 2, 2026-10-08): applied in Rev 6.2
+
+| ID | Decision | Reflected in |
+|---|---|---|
+| D-45 | **Failed sign-ins are counted per submitted username, whether or not the account exists.** After 5 failures the answer is "too many attempts, try again in 15 minutes" (429 `too_many_attempts` with `Retry-After`), the same for an existing and a non-existing username. Supersedes the Rev 4 rule that a paused account answers like a wrong password. Lands in PR 3, with tests for both cases. | 06a §3.3, §3.8, §6.1; 06b DN-03, DN-22, DN-23 |
+| D-46 | **The repo is deleted and recreated** (same name, public) so that the commits from before the 2026-10-08 clean-up are no longer served by GitHub. Only the clean branches are pushed to it. | `CLAUDE.md` |
+| — | PR 2 is approved. PRs 3–5 are next, then a review (D-44). | §5 |
+
+### Engineer's calls in Rev 6.2 (under D-3; veto any)
+
+| ID | Call | Why |
+|---|---|---|
+| R6-10 | **The per-username counter lives in its own table, `sign_in_throttle`, keyed by an HMAC of the submitted login** (a key derived from `SESSION_SECRET`), never the login in clear | A mistyped login can be a password or a name typed in the wrong box; it must not sit in the database in clear (the same reason it is never logged, 06b DN-02) |
+| R6-11 | **`staff_users.password_failures` and `password_paused_until` stay, unused** | Migrations never drop a column (R6-8); nothing has been released, so a later contract migration can remove them |
+| R6-12 | **The 5th failure itself answers 429,** and so does every try during the next 15 minutes, including a right password. Failures count in a 15-minute window from the first one; a success clears the count. | The person learns about the pause when it starts. Both cases run the same code path, so the answer reveals nothing about whether the account exists. |
+| R6-13 | **The trusted-device allowance stays** (5 failures per username per device before they count, DN-05), keyed by the submitted username too | A mistyping colleague at the front desk should not lock someone out; keyed by username, it treats real and unknown usernames alike |
+| R6-14 | **A global census of PIN hashes per pepper version, `pin_pepper_census`,** kept by a trigger | The startup check must know which pepper versions stored hashes use before any session exists. A count per version holds no tenant data, so it needs no new door past RLS (06a §2.4 stays as it is). |
 
 ### Engineer's calls in Rev 4 (under D-3; veto any)
 
@@ -275,7 +293,7 @@ After round 5: R4-1 is decided as D-32, R4-2 is widened by D-33, and R4-7 is con
 | **Milestone 2** | • Phone OTP, once the WhatsApp authentication template and the DLT sender header and template are approved.<br>• Backdating, including a GRN's `received_at`, and the entry-lag report.<br>• Manual opening balances (outside an import); supplier returns.<br>• The patient merge tool.<br>• Procedure use with `CONSUMABLES_ONLY` and procedure types; opened containers (P1-C, if OQ-1 confirms).<br>• GST tax rates.<br>• The outbox, daily and weekly jobs, reconciliation, purges.<br>• Master corrections.<br>• Valuation, consumption and non-moving reports.<br>• XLSX import. |
 | **Milestone 3** | `LICENSED_PHARMACY`; same-state transfers (D-19); stock takes and purchase orders; consumption templates; per-premises reorder levels; a server PDF for registers; WhatsApp refill reminders (after opt-in and opt-out, C-14); object storage at 10 GB (D-35); temperature logging; Ritu Desk integration if OQ-30 says yes |
 
-**How Milestone 1 is built:** 13 small PRs (06a §19). Each is on its own branch, based on the previous one, and each passes the full suite before the next starts. Reviews (D-44): PR 1 (approved), PR 2 on its own, then every three PRs.
+**How Milestone 1 is built:** 13 small PRs (06a §19). Each is on its own branch, based on the previous one, and each passes the full suite before the next starts. Reviews (D-44): PR 1 and PR 2 approved; then every three PRs (PRs 3–5 next).
 
 ### Go-live gates, for the first premises
 

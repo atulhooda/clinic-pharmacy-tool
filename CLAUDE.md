@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-A standalone, multi-tenant clinic pharmacy and stock app. The design is Spec 06 in `docs/specs/` (06 index, 06a design, 06b acceptance). It is stopped before code until the spec is approved.
+A standalone, multi-tenant clinic pharmacy and stock app. The design is Spec 06 in `docs/specs/` (06 index, 06a design, 06b acceptance). Milestone 1 is being built as small PRs (06a §19), each on its own branch based on the previous one.
 
 ## Writing or revising a spec
 
