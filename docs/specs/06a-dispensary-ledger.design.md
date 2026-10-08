@@ -15,6 +15,11 @@
   - a browser holding a valid trusted-device cookie must use a session of that device (§3.5);
   - the pepper-version check reads a global census table, `pin_pepper_census`, kept by a trigger; the retire step is a script (§2.6 rule 5, §3.12, §6.1);
   - the device endpoints M-10 and M-11, and their screen, are built in PR 3, because DW-01 and DW-15 need them (§19).
+- Clarified while building PR 4:
+  - only an owner can give or take the `owner` role (06 R7-1);
+  - administration writes get their idempotency key in PR 7; until then the single-use grant makes each signed write replay-proof (06 R7-2, §12.2);
+  - Hindi and Gujarati are offered only after review (06 R7-3, §16);
+  - §12.4's reversal example sends its grant in the `Reauth-Grant` header, like every other route.
 
 **Rev 6.1 changes (founder round 7, D-42 … D-44):**
 - Stock-count corrections, including found stock, are Milestone 1; the dispensing PR is split in two (§19: PR 9 dispensing, PR 10 returns, write-offs, count corrections, reversals). Milestone 1 is now 13 PRs.
@@ -1839,7 +1844,7 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 
 // POST /api/dispensary/reversals           Idempotency-Key: …
 { "documentType": "DISPENSE", "documentId": "uuid", "reasonCode": "WRONG_PATIENT",
-  "note": null, "reauthGrant": "uuid" }
+  "note": null }                            // the stock.reverse grant goes in the Reauth-Grant header (§3.7)
 ```
 
 ---
@@ -1945,7 +1950,7 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 - `DataList`, `Sheet`, `Dialog`, `Combobox`, `Field`, `Badge`, `StatusPill`, `KpiCard`, `EmptyState`;
 - the custom Tailwind palette, enforced by a class lint;
 - SWR polling;
-- en/hi/gu dictionary entries for every string, with Latin digits;
+- en/hi/gu dictionary entries for every string, with Latin digits. **Hindi and Gujarati are offered only once a native speaker has reviewed them** (06 R7-3); until then the app shows English;
 - `fmtPaise` for money.
 
 | Screen | Behaviour |

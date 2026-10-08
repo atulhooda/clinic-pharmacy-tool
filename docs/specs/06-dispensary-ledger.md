@@ -116,6 +116,15 @@
 | R6-13 | **The trusted-device allowance stays** (5 failures per username per device before they count, DN-05), keyed by the submitted username too | A mistyping colleague at the front desk should not lock someone out; keyed by username, it treats real and unknown usernames alike |
 | R6-14 | **A global census of PIN hashes per pepper version, `pin_pepper_census`,** kept by a trigger | The startup check must know which pepper versions stored hashes use before any session exists. A count per version holds no tenant data, so it needs no new door past RLS (06a §2.4 stays as it is). |
 
+### Engineer's calls made while building PRs 3–5 (under D-3; veto any)
+
+| ID | Call | Why |
+|---|---|---|
+| R7-1 | **Only an owner can give or take the `owner` role** (M-06, M-07: 403 `forbidden` otherwise) | A custom role holding `staff.manage` could otherwise promote someone to owner and so gain every permission |
+| R7-2 | **Administration writes get their `Idempotency-Key` in PR 7,** with the idempotency table (06a §12.2) | Until then every signed write is still replay-proof: its re-auth grant is single use, so a replay gets 401 `reauth_required`. M-08 (end sessions) needs no grant and is naturally idempotent. |
+| R7-3 | **Hindi and Gujarati are offered only after a native speaker has reviewed them** (06a §16) | The kit's few strings came with the desk's drafts, themselves still unreviewed; no unreviewed translation reaches a clinic |
+| R7-4 | **The UI kit copy leaves out the desk's appointment and SLA colour tokens, its product-named token and its web fonts** (the system font stack instead) | They describe the desk's domain, not this app's; system fonts avoid a build-time download |
+
 ### Engineer's calls in Rev 4 (under D-3; veto any)
 
 | ID | Call | Why | Where |
