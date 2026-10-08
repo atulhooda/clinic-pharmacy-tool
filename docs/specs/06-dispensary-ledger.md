@@ -113,6 +113,13 @@
 | D-47 | **A stock statement in Milestone 1:** for any period and premises, per item, **opening stock + new supply (received) − issued = balance**, with patient returns and the other movements (write-offs, count corrections, opening entries, reversals) in their own columns so the sum always balances. The clinic's words: "balance is important". The Stock page shows each item's balance as soon as stock moves (PR 7); the full statement, with print and CSV, comes with the other views (PR 11). | §5; 06a §14, §12.3 (E-45), §19; 06b DR-17 … 20, DX-81 |
 | D-48 | **Insights in Milestone 1:** a page like the desk's Insights. For today, yesterday, this or last week, this or last month, the last 30 days or any range, each compared with the period before: what was sold (dispenses, patients served, units, sales value), the top items, sales by day and by prescriber, what was received, stock health (low stock, near expiry, expired, non-moving) and stock value at cost and at MRP. **The consumption, valuation and non-moving reports move from Milestone 2 into Milestone 1** to feed it. | §5; 06a §14, §12.3 (E-46), §19 (PR 12); 06b DR-08, DR-09, DR-21 … 24, DX-82 |
 
+### Round 10 (founder, 2026-10-08): applied in Rev 6.2
+
+| ID | Decision | Reflected in |
+|---|---|---|
+| D-49 | **Invoice generation in Milestone 1.** Every sale at a premises that bills gets a numbered bill for the patient, printed at the counter and reprintable: a tax invoice, a bill of supply or a plain bill, as the premises' GST position requires. A reversed sale cancels its bill; a patient return issues a credit note against it. A sales register, with HSN and document summaries, gives the clinic's CA the figures. **GST rates per HSN move from Milestone 2 into Milestone 1.** Supersedes "Phase 1 stores price snapshots only" (06a §17). | §5; 06a §6.4, §6.5, §6.7, §9.3, §11.5, §12.3 (E-47 … E-50), §14, §16, §17, §19 (PR 11); 06b DBL-01 … 16, DX-83 … 86 |
+| D-50 | **Balances first.** The founder asked to see balances working: the ledger (PR 7) and receiving (PR 8) are built before patients and prescriptions (PR 6), and **the stock statement (E-45) moves into PR 8**, so the pilot clinic's own supplier bills show as balances in the local demo as early as possible. PR 6 follows PR 8. PR numbers stay as names; the migrations are renumbered in build order (06a §18). | §5; 06a §18, §19 |
+
 ### Engineer's calls in Rev 6.2 (under D-3; veto any)
 
 | ID | Call | Why |
@@ -133,6 +140,20 @@
 | R7-4 | **The UI kit copy leaves out the desk's appointment and SLA colour tokens and its product-named token.** It includes the desk's shell (sidebar, top bar, page heads) and its fonts, through `next/font`, self-hosted at build. | The tokens describe the desk's domain, not this app's. The shell and the fonts are what make both apps look alike (R4-9); `next/font` serves the fonts from the app itself, so no page calls a third party. (Until 2026-10-08 this call kept the system fonts; the founder asked for the desk's look.) |
 | R7-5 | **In Milestone 1 an item's identity never changes after creation** (base unit, batch tracking, master link) | A unit hierarchy and every future batch are defined against the base unit; a different identity is a different item. The DB freeze (once stock has moved) still comes with the ledger. |
 | R7-6 | **The minimal master is loaded unverified and without schedule flags;** only D-32's `requires_prescription` starting values are set | Schedule classifications are regulatory facts; they are set by the curator from a reviewed source, not drafted by the engineering side (06 OQ-5). Until then an organisation adds flags on its own items. |
+
+### Engineer's calls for billing and the build order (D-49, D-50; veto any)
+
+| ID | Call | Why |
+|---|---|---|
+| R8-1 | **Each premises chooses its billing mode explicitly, with no default:** `TAX_INVOICE`, `BILL_OF_SUPPLY_EXEMPT`, `BILL_OF_SUPPLY_COMPOSITION` or `BILL_UNREGISTERED`. Unset means the premises does not bill. Choosing or changing it is a premises legal setting (signing PIN, history row). | What a clinic must issue depends on its GST registration and on how its CA treats in-clinic dispensing (OQ-3). Supporting all four lets the build go ahead; the CA picks one before go-live. |
+| R8-2 | **One bill per dispense, issued in the dispense's own transaction,** from a gapless series per premises and financial year: `{prefix}/{FY}/{seq}`, e.g. `AG/2627/00001`, at most 16 characters. Credit notes have their own series (`AG/2627/C0001`). | GST asks for a consecutive serial number, unique within the financial year, of at most 16 characters. Issuing inside the dispense's transaction means a failed dispense uses no number and no sale goes without its bill. |
+| R8-3 | **Prices include GST; the tax is worked back per line** in integers (06a §11.5), CGST taking the odd paisa. The amount payable may be rounded to the nearest rupee (a premises setting), shown as a round-off. | The MRP includes all taxes and §11.2 already caps every price at it, so the price the patient sees is tax-inclusive. Working per line keeps every line exact: taxable + CGST + SGST = net. |
+| R8-4 | **Bills are immutable.** A reversal cancels its bill, and the number is never reused; a patient return issues a credit note valued in proportion to the quantity, the last return on a line taking exactly what remains. | The rule of every posted document (06a §6.7). A credit note is how GST corrects a sale already billed. |
+| R8-5 | **Where a premises bills, every dispense line needs a price** (422 `PRICE_REQUIRED`; the screen pre-fills the MRP ceiling), **and under `TAX_INVOICE` every item needs a GST rate on the day** (422 `TAX_RATE_MISSING`; the preview says so first, and the Items page marks items without a rate). | A bill with a missing price or a guessed rate is worse than a visible stop at the counter. |
+| R8-6 | **Printed, never sent, and no money handling:** an HTML print view in A5 and 80 mm roll layouts ("Save as PDF" is the browser's); never over WhatsApp; no payments, dues or refunds recorded. | R4-8 (no server PDF) and the 06a §17 boundary. A cash register is its own feature. |
+| R8-7 | **The sales register holds no patient data,** so it is a `stock.reports` view; the bill itself names the patient and is read under `dispense.view`. Bills are kept like registers: never deleted, including after an erasure request, for the GST retention period (OQ-11). | The CA needs numbers, not names. |
+| R8-8 | **A number prefix is unique in the organisation for good:** once used, it cannot move to another premises. | Two premises under one GSTIN must never print the same number. |
+| R8-9 | **D-50's order:** PRs 7 and 8 before PR 6, PR 6 before PR 9. The migrations are renumbered in build order (019–021 the ledger, 022 receiving, 023–025 people), because the runner requires contiguous numbers (06b DMG-12). | Nothing in the ledger or in receiving reads patients or prescriptions; dispensing (PR 9) needs all three. |
 
 ### Engineer's calls in Rev 4 (under D-3; veto any)
 
@@ -256,14 +277,14 @@ After round 5: R4-1 is decided as D-32, R4-2 is widened by D-33, and R4-7 is con
 | ID | Question | Assumed | Blocks |
 |---|---|---|---|
 | **OQ-1** | Which premises goes first, under which mode? Does the pilot clinic dispense at all? Does it inject in-clinic? This decides P1-C. | its first premises, `RMP_OWN_PATIENTS`; P1-C included | PR 6 |
-| **OQ-3** | GST treatment of in-clinic dispensing; needs a CA | rate snapshot only | billing |
+| **OQ-3** | GST treatment of in-clinic dispensing; needs a CA. **Since D-49** the CA confirms, for each premises that bills: its billing mode (R8-1); the document titles and the composition legend (06a §11.5); the rounding (R8-3); whether a patient's address must appear above some value; and whether copies need labels. | each premises' mode as chosen; the wording in 06a §11.5 | go-live (billing) |
 | **OQ-5** | Who curates `medicine_master`, and from which **licensed** source? NLEM 2022 (public, generics only) is a start; brand data needs a licence. | an empty master + custom items + NLEM generics | PR 2 seed |
 | **OQ-8** | Counsel's review of the mode rules, the register formats and the prescription rules (MR-18/21). Who has prepared registers for an inspection? | the brief's rules | go-live |
 | **OQ-9** | Extra H1 fields per state advisory (Gujarat, Maharashtra) | `{}` per premises | go-live |
 | **OQ-10** | Retail cosmeceuticals to walk-ins at an RMP premises? | no | PR 6 |
-| **OQ-11** | DPDP erasure vs register retention, now including prescription photos | snapshots and photos kept for the register period; erasure is a founder decision | PR 3 |
+| **OQ-11** | DPDP erasure vs register retention, now including prescription photos and bills (D-49) | snapshots and photos kept for the register period, bills for the GST retention period; erasure is a founder decision | PR 3 |
 | **OQ-13** | Supplier-licence and manufacturer rules at a `CONSUMABLES_ONLY` premises? | not applied | PR 5 |
-| **OQ-14** | GST per HSN as a second global table? | per organisation | PR 2 |
+| **OQ-14** | GST per HSN as a second global table? | per organisation | PR 11 |
 | **OQ-15** | A batch re-arriving with a revised MRP | reject | PR 5 |
 | **OQ-17** | Job runner | a Railway cron service → a `tsx` script as `pharmacy_jobs` | PR 7 |
 | **OQ-19** | Pharmacy-software import adapters; `exceljs` for XLSX | the generic template | PR 8 |
@@ -302,16 +323,17 @@ After round 5: R4-1 is decided as D-32, R4-2 is widened by D-33, and R4-7 is con
   - MR-01 … 05, 08 … 11, 13, 14, 18 (`requires_prescription`), 19 … 22;
   - patient returns; write-offs (expiry, damage); **stock-count corrections**, up or down, including found stock, which may create its batch (D-42); reversals; idempotency.
 - **Views:** stock overview, low stock, near expiry (computed live, no jobs); **the stock statement** (opening + received − issued = balance, per item and period, D-47); **Insights** (sales by period with comparisons, top items, by prescriber, stock health, stock value: D-48); the H1 and purchase registers (print view and CSV).
+- **Billing (D-49):** a numbered bill for every sale at a premises that bills (tax invoice, bill of supply or bill), cancelled with its reversal; credit notes for patient returns; GST rates per HSN; the sales register with HSN and document summaries (print and CSV).
 
 **Later (everything else in Rev 5):**
 
 | Milestone | Contents |
 |---|---|
 | **Pilot go-live** (after Milestone 1 is accepted) | Hosting in its own Railway project; DS-12 (no superuser DSN); the restore drill (06b DMG-10); `PIN_PEPPERS` set; the DPA (OQ-24); counsel's review (OQ-8, OQ-32); OQ-1 |
-| **Milestone 2** | • Phone OTP, once the WhatsApp authentication template and the DLT sender header and template are approved.<br>• Backdating, including a GRN's `received_at`, and the entry-lag report.<br>• Manual opening balances (outside an import); supplier returns.<br>• The patient merge tool.<br>• Procedure use with `CONSUMABLES_ONLY` and procedure types; opened containers (P1-C, if OQ-1 confirms).<br>• GST tax rates.<br>• The outbox, daily and weekly jobs, reconciliation, purges.<br>• Master corrections.<br>• XLSX import. |
+| **Milestone 2** | • Phone OTP, once the WhatsApp authentication template and the DLT sender header and template are approved.<br>• Backdating, including a GRN's `received_at`, and the entry-lag report.<br>• Manual opening balances (outside an import); supplier returns.<br>• The patient merge tool.<br>• Procedure use with `CONSUMABLES_ONLY` and procedure types; opened containers (P1-C, if OQ-1 confirms).<br>• The outbox, daily and weekly jobs, reconciliation, purges.<br>• Master corrections.<br>• XLSX import. |
 | **Milestone 3** | `LICENSED_PHARMACY`; same-state transfers (D-19); stock takes and purchase orders; consumption templates; per-premises reorder levels; a server PDF for registers; WhatsApp refill reminders (after opt-in and opt-out, C-14); object storage at 10 GB (D-35); temperature logging; Ritu Desk integration if OQ-30 says yes |
 
-**How Milestone 1 is built:** 14 small PRs (06a §19). Each is on its own branch, based on the previous one, and each passes the full suite before the next starts. Reviews (D-44): PR 1 and PR 2 approved; then every three PRs (PRs 3–5 next).
+**How Milestone 1 is built:** 15 small PRs (06a §19), in the order D-50 sets: 1–5, 7, 8, 6, 9, 10, then 11–15. Each is on its own branch, based on the previous one, and each passes the full suite before the next starts. Reviews (D-44): PR 1 and PR 2 approved; then every three PRs (PRs 3–5 next).
 
 ### Go-live gates, for the first premises
 
@@ -322,3 +344,4 @@ After round 5: R4-1 is decided as D-32, R4-2 is widened by D-33, and R4-7 is con
 5. `PIN_PEPPERS` set as a Railway variable, and the pepper rotation rehearsed once on staging (06a §3.12).
 6. OQ-1 is answered (and OQ-27 too, once P1-C is built).
 7. **Phone OTP is not a gate for the pilot:** Milestone 1 signs in by password (D-39). It becomes a gate for Milestone 2's OTP sign-in.
+8. For each premises that bills, the clinic's CA has confirmed its billing mode and the bill's wording (OQ-3).

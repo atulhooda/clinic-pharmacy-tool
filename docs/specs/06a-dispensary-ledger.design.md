@@ -7,7 +7,9 @@
 **Type:** design spec (architecture, identity, data model, invariants, operations, API)
 **Index, decisions, open questions:** [06](06-dispensary-ledger.md) · **Acceptance gate:** [06b](06b-dispensary-ledger.acceptance.md)
 
-**Rev 6.2 changes (founder review of PR 2, D-45 … D-47):**
+**Rev 6.2 changes (founder review of PR 2, D-45 … D-50):**
+- **Balances first (D-50):** the ledger (PR 7) and receiving (PR 8) are built before patients and prescriptions (PR 6), and the stock statement (E-45) moves into PR 8. The migrations are renumbered in build order (§18, §19).
+- **Invoice generation (D-49):** a numbered bill per sale at a premises that bills, in the document its GST position requires; cancellation with a reversal; credit notes for patient returns; GST rates per HSN in Milestone 1; the sales register (§6.4, §6.5, §6.7, §9.3, new §11.5, §12.3 E-47 … E-50, §14, §16, §17). It is a new PR 11, so the views are PR 12, Insights PR 13, import PR 14 and pilot readiness PR 15 (§19).
 - **Insights (D-48):** sales by period with comparisons, top items, by prescriber, receiving, stock health and value (§14, E-46); a new PR 12, so import is PR 13 and pilot readiness PR 14 (§19). The consumption, valuation and non-moving reports join Milestone 1.
 - **The stock statement (D-47):** opening + received − issued = balance, per item and period (§14, E-45, §19 PR 11); each item's balance on the Stock page from PR 7.
 - Failed sign-ins are counted **per submitted username**, whether or not the account exists; after 5 failures the answer is 429 `too_many_attempts` for both (§3.3, §3.8). The counter moves to a new table, `sign_in_throttle`, holding only an HMAC of the login (§6.1, R6-10).
@@ -23,7 +25,7 @@
   - Hindi and Gujarati are offered only after review (06 R7-3, §16);
   - §12.4's reversal example sends its grant in the `Reauth-Grant` header, like every other route.
 - Clarified while building PR 5:
-  - the parts of the catalogue that read the ledger arrive with it in PR 7: E-18 (an item's movements), E-14's batches and balances, E-12's `lowStock`, `nearExpiry` and `premisesId` filters, and the `items_freeze` trigger, which is created in migration 023 next to `stock_movements` (§6.5, §18, §19);
+  - the parts of the catalogue that read the ledger arrive with it in PR 7: E-18 (an item's movements), E-14's batches and balances, E-12's `lowStock`, `nearExpiry` and `premisesId` filters, and the `items_freeze` trigger, which is created in migration 020 (023 before D-50) next to `stock_movements` (§6.5, §18, §19);
   - in Milestone 1, E-15 never changes an item's identity (base unit, batch tracking, master link): those fields are not in its schema, so `ITEM_IDENTITY_LOCKED` cannot arise; a different identity is a new item (06 R7-5);
   - E-13 creates the item's base unit itself (factor 1, named after the base unit);
   - E-05 needs E-02 first (409 `DISPENSARY_NOT_CONFIGURED`) and runs once per premises (409 `PREMISES_ALREADY_CONFIGURED`); E-07 can also deactivate a further location, never the default store or the quarantine (422 `LOCATION_REQUIRED`);
@@ -599,11 +601,11 @@ If the only owner is locked out, the same CLI recovers them (`--reset-owner`), a
 | `stock.dispense` | dispense, preview, patient returns, procedure use, opening and discarding containers | ✓ | ✓ | ✓ |
 | `stock.backdate` | backdating a dispense, procedure use, patient return or receipt within the **standard** window (default 48 h, §11.4) | ✓ | ✓ | ✓ |
 | `stock.backdate_extended` | the same, up to the **extended** window (default 7 days) | ✓ | | |
-| `dispense.view` | reading patient-linked stock documents (org-wide: one patient across premises) | ✓ | ✓ | ✓ |
+| `dispense.view` | reading patient-linked stock documents, bills and credit notes included (org-wide: one patient across premises) | ✓ | ✓ | ✓ |
 | `stock.writeoff` | write-offs; supplier returns | ✓ | | |
 | `stock.adjust` | stock adjustments; manual opening balances; **reversals of any document** | ✓ | | |
 | `stock.import` | opening-balance import | ✓ | | |
-| `stock.reports` | stock reports without patient data | ✓ | ✓ | |
+| `stock.reports` | stock reports without patient data, the sales register included (D-49) | ✓ | ✓ | |
 | `stock.registers` | the H1 and purchase registers; any export with patient data | ✓ | ✓ | |
 | `stock.settings` | stock settings; per-premises mode, licences and register fields; locations; procedure types | ✓ | | |
 
@@ -961,6 +963,9 @@ Index: trigram GIN on `lower(brand_name)` (`pg_trgm`), for import matching and s
 | `retail_drug_licence_numbers`, `retail_licence_valid_till` | TEXT[], DATE | Phase 2; CHECK non-empty when the mode is `LICENSED_PHARMACY` |
 | `h1_register_extra_fields` | TEXT[] NOT NULL DEFAULT `'{}'` | CHECK `<@ ARRAY['PATIENT_ADDRESS','PATIENT_AGE','PATIENT_DOB','PRESCRIPTION_DATE']`. State advisories differ (06 OQ-9). |
 | `prescription_max_age_days` | INTEGER NULL | CHECK 1–365. NULL = no age limit (06 OQ-32). It applies when a dispense links a prescription (MR-21). |
+| `billing_mode` | TEXT NULL | **D-49, R8-1; added by migration 031 (nullable, R6-8).** CHECK in (`TAX_INVOICE`,`BILL_OF_SUPPLY_EXEMPT`,`BILL_OF_SUPPLY_COMPOSITION`,`BILL_UNREGISTERED`). NULL = this premises does not bill. **No default.** Only a premises whose mode can dispense may bill, and every mode but `BILL_UNREGISTERED` needs the premises' GSTIN (§11.5). |
+| `billing_legal_name`, `billing_series_prefix`, `billing_round_off` | TEXT, TEXT, BOOLEAN; NULL | Required when `billing_mode` is set (CHECK). The legal name is the registration's (or the proprietor's) name, printed above the premises' name. The prefix: CHECK `^[A-Z0-9]{1,4}$`, unique in the organisation for good (R8-8). Round-off: the amount payable is rounded to the nearest rupee (§11.5). |
+| `billing_phone`, `billing_footer` | TEXT NULL | printed on the bill; the footer ≤ 300 characters |
 | `version`, `updated_by`, `updated_at` | | |
 
 **`stock_settings_history`** and **`premises_settings_history`**: append-only (§7.3).
@@ -1010,7 +1015,7 @@ Further locations within a premises are Phase 2. Every balance and movement alre
 | `in_use_hours` | INTEGER NULL | **P1-C.** CHECK > 0. How long an opened container may be used, **copied by staff from the product label**, never computed. CHECK (`container_unit_id IS NULL`) = (`in_use_hours IS NULL`). |
 | `active` | BOOLEAN NOT NULL DEFAULT true | |
 
-Trigger `items_freeze`: once any movement exists for the item, `base_unit`, `track_batches`, `master_id` and `container_unit_id` are immutable. It is created with the ledger (migration 023, PR 7), since it reads `stock_movements`.
+Trigger `items_freeze`: once any movement exists for the item, `base_unit`, `track_batches`, `master_id` and `container_unit_id` are immutable. It is created with the ledger (migration 020, PR 7), since it reads `stock_movements`.
 
 **`item_units`**: the pack hierarchy, stored as a direct factor to the base unit (box = 150 tablets, not "box = 10 strips").
 
@@ -1022,7 +1027,7 @@ Trigger `items_freeze`: once any movement exists for the item, `base_unit`, `tra
 | `is_base` | BOOLEAN NOT NULL | partial UNIQUE (`org_id`, `item_id`) WHERE `is_base`; CHECK (NOT `is_base` OR factor = 1) |
 | `dispensable`, `purchasable`, `active` | BOOLEAN | |
 
-**`item_tax_rates`**: keyed by HSN, because GST attaches to HSN codes. Per organisation (06 OQ-14).
+**`item_tax_rates`**: keyed by HSN, because GST attaches to HSN codes. Per organisation (06 OQ-14). **Milestone 1 since D-49** (migration 030, PR 11). An item's HSN is its `hsn_code_override`, else its master row's `hsn_code`; a bill applies the row effective on its IST date.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -1225,6 +1230,35 @@ DB CHECKs:
 | `document_id` | **UNIQUE (`org_id`, `document_type`, `document_id`)**: a document is reversed at most once |
 | `reason_code` | NOT NULL; CHECK (`DATA_ENTRY_ERROR`,`WRONG_PATIENT`,`WRONG_ITEM`,`DUPLICATE_ENTRY`,`NOT_HANDED_OVER`,`OTHER`) |
 | `note`, `reversed_by`, `reversed_at` | `note` required when the reason is `OTHER` |
+
+**Bills (D-49).** Issued only by operations (§9.3, §11.5), never created or edited directly.
+
+**`billing_series`**: one gapless counter per premises, kind, financial year and prefix.
+
+| Column | Notes |
+|---|---|
+| `premises_id`, `kind`, `fy`, `prefix` | `kind` CHECK (`BILL`,`CREDIT_NOTE`); `fy` CHAR(4), e.g. `2627` for 1 April 2026 – 31 March 2027 (IST); UNIQUE (`org_id`, `premises_id`, `kind`, `fy`, `prefix`) |
+| `last_seq` | INTEGER NOT NULL DEFAULT 0, CHECK ≥ 0; locked `FOR UPDATE` and raised by one in the issuing transaction |
+
+**`bills`**
+
+| Column | Notes |
+|---|---|
+| `premises_id`, `dispense_id` | FK (`org_id`, `premises_id`, `dispense_id`) → `dispenses`; **UNIQUE (`org_id`, `dispense_id`)**: one bill per dispense |
+| `number`, `fy`, `seq` | UNIQUE (`org_id`, `number`); CHECK `length(number) <= 16` |
+| `bill_date` | DATE: the IST date of `issued_at` |
+| `billing_mode_snapshot` | the premises' mode at issue; it decides the title and the tax columns |
+| **seller snapshot** | `legal_name`, `premises_name`, `address`, `state_code`, `gstin` (NULL under `BILL_UNREGISTERED`), `phone`, `footer` |
+| **buyer snapshot** | `patient_name_snapshot`; `prescriber_name_snapshot`, `prescriber_registration_no_snapshot`. Nothing else about the patient: no phone, and no address unless 06 OQ-3 requires one. |
+| `taxable_paise`, `cgst_paise`, `sgst_paise`, `total_paise`, `round_off_paise`, `payable_paise` | CHECK `total_paise = taxable_paise + cgst_paise + sgst_paise`; CHECK `payable_paise = total_paise + round_off_paise`; CHECK `round_off_paise` between −49 and 50 |
+| `issued_at`, `issued_by_staff_id`, `issued_by_label` | |
+| `status`, `cancelled_at`, `cancel_reason_code` | `status` CHECK (`ISSUED`,`CANCELLED`); cancelled only together with the dispense's `stock_reversals` row (trigger) |
+
+**`bill_lines`**: one per dispense line: `dispense_line_id` (composite FK, UNIQUE), `hsn_code_snapshot`, `gst_rate_bp` (NULL outside `TAX_INVOICE`), `net_paise` (a copy of the line's), `taxable_paise`, `cgst_paise`, `sgst_paise`; CHECK `taxable_paise + cgst_paise + sgst_paise = net_paise`. The item, quantity, unit, MRP, price, discount and batches are read from the immutable dispense line and its allocations.
+
+**`credit_notes`** / **`credit_note_lines`**: as bills, for a patient return from a billed dispense: `patient_return_id` (UNIQUE), `bill_id`, the bill's number and date (snapshots), the same seller and buyer snapshots and totals; one line per return line with `bill_line_id`, `qty_base`, `net_paise` and the same tax split. `status` CHECK (`ISSUED`,`CANCELLED`); cancelled only with the return's reversal.
+
+All five tables are append-only apart from `last_seq` and the status change (triggers), and no row is ever deleted (like the register sources, L-15).
 
 **`opened_containers`** (P1-C): multi-dose containers, e.g. a reconstituted toxin vial.
 
@@ -1534,18 +1568,18 @@ Movements are inserted in the same canonical order. A deadlock (`40P01`) or seri
 |---|---|---|---|
 | `setup_dispensary` | `stock.settings`; no settings row yet | the stock settings row | 409 `ALREADY_CONFIGURED` |
 | `setup_premises(premisesId, mode, licences, registerFields)` | `stock.settings` + grant `premises.legal_settings`; the premises is in the organisation | premises settings + history row + the default and quarantine locations | 404 `PREMISES_NOT_FOUND`; 422 `MODE_NOT_AVAILABLE` (`LICENSED_PHARMACY` in Phase 1); 409 `ALREADY_CONFIGURED` |
-| `update_settings` / `update_premises_settings` (`If-Match`) | the version matches; the premises one needs the `premises.legal_settings` grant | row update + history row | 412 `VERSION_MISMATCH`; 422 `MODE_NOT_AVAILABLE`, `LICENCE_DATES_INVALID` |
+| `update_settings` / `update_premises_settings` (`If-Match`) | the version matches; the premises one needs the `premises.legal_settings` grant | row update + history row | 412 `VERSION_MISMATCH`; 422 `MODE_NOT_AVAILABLE`, `LICENCE_DATES_INVALID`; from PR 11 also 422 `BILLING_NOT_ALLOWED`, `GSTIN_REQUIRED`, `BILLING_DETAILS_REQUIRED` and 409 `PREFIX_TAKEN` (§11.5) |
 | `create_item`, `update_item`, `add_unit`, `set_tax_rate` | `stock.items` | catalogue rows; the base unit row is created automatically | 404 `MASTER_ITEM_NOT_FOUND`; 409 `ITEM_EXISTS`, `ITEM_IDENTITY_LOCKED`; 422 `TAX_RATE_OVERLAP`, `UNIT_FACTOR_IMMUTABLE` |
 | `create_grn_draft`, `update_grn_draft`, `discard_grn` | `stock.receive`; supplier, items and premises in the organisation | a DRAFT header and lines, no movements; discard → `DISCARDED` | 404 for any out-of-scope reference; 409 `GRN_NOT_DRAFT` |
 | `post_grn` | DRAFT; ≥ 1 line; tracked lines have `batch_no`, `expiry_date`, `mrp_paise` and `mrp_unit_id`; **the mode rules for the GRN's premises** (MR-03, MR-04, MR-08, MR-09). If `received_at` is in the past: the backdating tier, reason and window (§11.4), and `received_at ≥ invoice_date`. | resolves or creates batches; one `RECEIPT` per line (canonical order) with `occurred_at = received_at`; supplier snapshot; `POSTED` | 422 `SUPPLIER_LICENCE_MISSING`, `MANUFACTURER_DETAILS_MISSING`, `LICENCE_REQUIRED_NDPS`, `LICENCE_REQUIRED_SCHEDULE_X`, `QTY_NOT_WHOLE_BASE_UNITS`; 409 `BATCH_EXPIRED`, `BATCH_MRP_MISMATCH`, `DUPLICATE_INVOICE`, `GRN_NOT_DRAFT`. Warnings: `SUPPLIER_LICENCE_EXPIRED`, `NEAR_EXPIRY_ON_ARRIVAL`. |
-| `preview_dispense` | `stock.dispense`; the premises' mode allows dispensing | **read-only:** FEFO allocations, per-unit MRP ceilings, the remaining prescribed quantity for MR-18 lines, warnings. No locks, no writes. | the same validation errors as `dispense` |
-| `dispense` | `stock.dispense` (+ `stock.backdate` / `stock.backdate_extended` if backdated, and a `stock.backdate` signing-PIN grant beyond the reason-free lag, D-33); premises membership (MR-19); **the mode rules for the premises as of `occurred_at`** (MR-01, MR-02, MR-06, MR-08, MR-09, MR-15, MR-18, MR-20, MR-21, MR-22); patient, prescriber and prescription in the organisation.<br>Each line: the item is active; the unit is of that item and dispensable; whole base units; the substitution triple is complete where needed; price ≤ MRP (§11.2). | locks; allocates; inserts the dispense, lines, allocations and `DISPENSE` movements; the register snapshot if any line is H1/X/NDPS; `stock.low` on a crossing; `dispense.completed` | 404 `PATIENT_NOT_FOUND`, `PRESCRIBER_NOT_FOUND`, `PRESCRIPTION_NOT_FOUND`, `ITEM_NOT_FOUND`, `BATCH_NOT_FOUND`, `PREMISES_NOT_FOUND`, `LOCATION_NOT_FOUND`;<br>409 `PRESCRIPTION_VOID`, `RX_QTY_EXCEEDED`, `INSUFFICIENT_STOCK` (with `details[]`), `INSUFFICIENT_STOCK_AS_OF`, `BATCH_EXPIRED` (manual pick), `MODE_FORBIDS_OPERATION`;<br>422 `PATIENT_REQUIRED`, `PATIENT_ARCHIVED`, `PATIENT_DETAILS_REQUIRED`, `PRESCRIBER_NOT_INTERNAL`, `PRESCRIBER_REGISTRATION_MISSING`, `PRESCRIPTION_PATIENT_MISMATCH`, `PRESCRIPTION_PRESCRIBER_MISMATCH`, `PRESCRIPTION_DATED_AFTER_SUPPLY`, `PRESCRIPTION_TOO_OLD`, `PRESCRIPTION_IMAGE_MISSING`, `RX_REQUIRED`, `RX_LINE_ITEM_MISMATCH`, `RX_EVIDENCE_REQUIRED`, `RX_QTY_NOT_RECORDED`, `UNIT_NOT_DISPENSABLE`, `QTY_NOT_WHOLE_BASE_UNITS`, `QTY_FORMAT`, `PRICE_ABOVE_MRP`, `DISCOUNT_EXCEEDS_GROSS`, `SUBSTITUTION_INCOMPLETE`, `ITEM_INACTIVE`, `LICENCE_REQUIRED_*`, `BACKDATE_*` |
+| `preview_dispense` | `stock.dispense`; the premises' mode allows dispensing | **read-only:** FEFO allocations, per-unit MRP ceilings, the remaining prescribed quantity for MR-18 lines, warnings; where the premises bills, the bill's lines and totals, without a number. No locks, no writes. | the same validation errors as `dispense` |
+| `dispense` | `stock.dispense` (+ `stock.backdate` / `stock.backdate_extended` if backdated, and a `stock.backdate` signing-PIN grant beyond the reason-free lag, D-33); premises membership (MR-19); **the mode rules for the premises as of `occurred_at`** (MR-01, MR-02, MR-06, MR-08, MR-09, MR-15, MR-18, MR-20, MR-21, MR-22); patient, prescriber and prescription in the organisation.<br>Each line: the item is active; the unit is of that item and dispensable; whole base units; the substitution triple is complete where needed; price ≤ MRP (§11.2).<br>**Where the premises bills (D-49):** every line has a price; under `TAX_INVOICE`, each line's item has a GST rate on the day. | locks; allocates; inserts the dispense, lines, allocations and `DISPENSE` movements; the register snapshot if any line is H1/X/NDPS; `stock.low` on a crossing; `dispense.completed`; **the bill**, issued last (§11.5) | 404 `PATIENT_NOT_FOUND`, `PRESCRIBER_NOT_FOUND`, `PRESCRIPTION_NOT_FOUND`, `ITEM_NOT_FOUND`, `BATCH_NOT_FOUND`, `PREMISES_NOT_FOUND`, `LOCATION_NOT_FOUND`;<br>409 `PRESCRIPTION_VOID`, `RX_QTY_EXCEEDED`, `INSUFFICIENT_STOCK` (with `details[]`), `INSUFFICIENT_STOCK_AS_OF`, `BATCH_EXPIRED` (manual pick), `MODE_FORBIDS_OPERATION`;<br>422 `PATIENT_REQUIRED`, `PATIENT_ARCHIVED`, `PATIENT_DETAILS_REQUIRED`, `PRESCRIBER_NOT_INTERNAL`, `PRESCRIBER_REGISTRATION_MISSING`, `PRESCRIPTION_PATIENT_MISMATCH`, `PRESCRIPTION_PRESCRIBER_MISMATCH`, `PRESCRIPTION_DATED_AFTER_SUPPLY`, `PRESCRIPTION_TOO_OLD`, `PRESCRIPTION_IMAGE_MISSING`, `RX_REQUIRED`, `RX_LINE_ITEM_MISMATCH`, `RX_EVIDENCE_REQUIRED`, `RX_QTY_NOT_RECORDED`, `UNIT_NOT_DISPENSABLE`, `QTY_NOT_WHOLE_BASE_UNITS`, `QTY_FORMAT`, `PRICE_ABOVE_MRP`, `PRICE_REQUIRED`, `TAX_RATE_MISSING`, `DISCOUNT_EXCEEDS_GROSS`, `SUBSTITUTION_INCOMPLETE`, `ITEM_INACTIVE`, `LICENCE_REQUIRED_*`, `BACKDATE_*` |
 | `record_procedure_use` | `stock.dispense` (+ `stock.backdate`); a patient link per `procedure_use_patient_link`; the premises' NDPS/X licence; under `DOCTOR_OVERRIDE`, a lapse override needs a prescriber-linked session and the `container.lapse_override` grant | as dispense, with `PROCEDURE_USE` movements and no price; for multi-dose items it draws from or opens containers (P1-C) | 422 `PATIENT_REQUIRED`, `OVERRIDE_REASON_REQUIRED`; 403 `prescriber_login_required`; 409 `CONTAINER_LAPSED`, `CONTAINER_CLOSED`; otherwise as dispense |
-| `return_from_patient` | `stock.dispense` (+ `stock.backdate`); the premises' mode allows dispensing; the dispense is `COMPLETED`; each allocation belongs to it; qty ≤ allocated − Σ prior non-reversed returns (dispense row locked) | `PATIENT_RETURN` +q into the **original batch** at the return location. `DISCARD` also writes `DAMAGE_WRITEOFF` −q, or `EXPIRY_WRITEOFF` if the batch has since expired. A return does **not** give back MR-18 prescribed quantity (only a reversal does). | 404 `DISPENSE_NOT_FOUND`, `ALLOCATION_NOT_FOUND`; 409 `DISPENSE_REVERSED`, `RETURN_WRONG_PREMISES` (only the dispensing premises can receive it, §2.6); 422 `RETURN_EXCEEDS_DISPENSED` |
+| `return_from_patient` | `stock.dispense` (+ `stock.backdate`); the premises' mode allows dispensing; the dispense is `COMPLETED`; each allocation belongs to it; qty ≤ allocated − Σ prior non-reversed returns (dispense row locked) | `PATIENT_RETURN` +q into the **original batch** at the return location. `DISCARD` also writes `DAMAGE_WRITEOFF` −q, or `EXPIRY_WRITEOFF` if the batch has since expired. A return does **not** give back MR-18 prescribed quantity (only a reversal does). If the dispense has a bill: a **credit note** against it (§11.5). | 404 `DISPENSE_NOT_FOUND`, `ALLOCATION_NOT_FOUND`; 409 `DISPENSE_REVERSED`, `RETURN_WRONG_PREMISES` (only the dispensing premises can receive it, §2.6); 422 `RETURN_EXCEEDS_DISPENSED` |
 | `return_to_supplier` | `stock.writeoff` + grant `stock.writeoff`; supplier in the organisation; qty ≤ on hand (locked); expired batches allowed | `SUPPLIER_RETURN` movements | 404s; 409 `INSUFFICIENT_STOCK`; 422 `REASON_REQUIRED` |
 | `write_off(kind, lines)` | `stock.writeoff` + grant `stock.writeoff`; a reason is mandatory; `EXPIRY_WRITEOFF` only on an expired batch; `DAMAGE_WRITEOFF` on any batch | an adjustment document + movements | 422 `REASON_REQUIRED`, `NOTE_REQUIRED`; 409 `EXPIRY_WRITEOFF_NOT_EXPIRED`, `INSUFFICIENT_STOCK` |
 | `adjust_stock(lines)` | `stock.adjust` + grant `stock.adjust`; a reason is mandatory; a negative adjustment ≤ on hand; expired batches allowed (corrections); `OPENING_BALANCE` only where that (item, batch, location) has **no** prior movement | `STOCKTAKE_ADJUSTMENT` or `OPENING_BALANCE` movements | 409 `OPENING_BALANCE_NOT_ALLOWED`, `INSUFFICIENT_STOCK` |
-| `reverse_document(type, id, reason, note)` | `stock.adjust` + grant `stock.reverse`; the document is in the organisation and not reversed.<br>• `DISPENSE`/`PROCEDURE_USE`: within `dispense_reversal_window_hours` of `recorded_at`.<br>• **No live dependents:** e.g. a dispense with non-reversed returns, or a GRN whose lines supplier returns reference.<br>• `STOCK_IMPORT`: only if none of its keys has a later movement. | The `stock_reversals` row (UNIQUE), then one `REVERSAL` per original movement (canonical order); status `REVERSED`.<br>• A reversed dispense gives back its MR-18 prescribed quantity.<br>• A reversed procedure use returns its drawn units to the container if it is still `OPEN`.<br>• If the container was **`DISCARDED`**, each returned draw is **paired in the same transaction** with a `DAMAGE_WRITEOFF` of the same quantity, linked to that container (D-20). Units never go back into a discarded vial as usable stock. | 404 `DOCUMENT_NOT_FOUND`; 409 `ALREADY_REVERSED`, `REVERSAL_WINDOW_CLOSED`, `DOCUMENT_HAS_DEPENDENTS`, `INSUFFICIENT_STOCK` (e.g. reversing a GRN whose stock was already used: use a supplier return or adjustment instead) |
+| `reverse_document(type, id, reason, note)` | `stock.adjust` + grant `stock.reverse`; the document is in the organisation and not reversed.<br>• `DISPENSE`/`PROCEDURE_USE`: within `dispense_reversal_window_hours` of `recorded_at`.<br>• **No live dependents:** e.g. a dispense with non-reversed returns, or a GRN whose lines supplier returns reference.<br>• `STOCK_IMPORT`: only if none of its keys has a later movement. | The `stock_reversals` row (UNIQUE), then one `REVERSAL` per original movement (canonical order); status `REVERSED`.<br>• A reversed dispense gives back its MR-18 prescribed quantity and **cancels its bill**; a reversed patient return cancels its credit note (D-49).<br>• A reversed procedure use returns its drawn units to the container if it is still `OPEN`.<br>• If the container was **`DISCARDED`**, each returned draw is **paired in the same transaction** with a `DAMAGE_WRITEOFF` of the same quantity, linked to that container (D-20). Units never go back into a discarded vial as usable stock. | 404 `DOCUMENT_NOT_FOUND`; 409 `ALREADY_REVERSED`, `REVERSAL_WINDOW_CLOSED`, `DOCUMENT_HAS_DEPENDENTS`, `INSUFFICIENT_STOCK` (e.g. reversing a GRN whose stock was already used: use a supplier return or adjustment instead) |
 | `open_container` (P1-C) | `stock.dispense`; a multi-dose item; sealed stock in the batch; the batch is not expired | an `opened_containers` row with `discard_after = opened_at + in_use_hours`. It also happens implicitly on the first draw. | 409 `INSUFFICIENT_STOCK`, `BATCH_EXPIRED` |
 | `discard_container` (P1-C) | `stock.dispense`; the container is `OPEN` | a `DAMAGE_WRITEOFF` of the remaining units, reason `OPENED_CONTAINER_LAPSED` (past `discard_after`) or `DAMAGED`/`OTHER` with a note (early); status `DISCARDED`. A container reaching 0 remaining becomes `EXHAUSTED` automatically. | 409 `CONTAINER_CLOSED` |
 | Import operations | §15 | | |
@@ -1663,6 +1697,64 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 - **Registers always show both times (D-10):** the time of supply (`occurred_at`) **and** the time recorded (`recorded_at`), plus any reason. This holds for every row, not only backdated ones, so an inspector sees the gap on every entry.
 - **Measured from `recorded_at`:** the reversal window, idempotency and event emission.
 
+### 11.5 Bills, credit notes and GST (D-49)
+
+**Which document.** The premises' `billing_mode` (§6.4) decides it. The clinic's CA confirms the mode and this wording before go-live (06 OQ-3).
+
+| `billing_mode` | Title | Seller's GSTIN | Tax columns | Also printed |
+|---|---|---|---|---|
+| `TAX_INVOICE` | "Tax Invoice" | yes | HSN, GST rate, taxable value, CGST, SGST per line, with totals | "Place of supply: {state} ({code})"; "Reverse charge: No" |
+| `BILL_OF_SUPPLY_EXEMPT` | "Bill of Supply" | yes | none | |
+| `BILL_OF_SUPPLY_COMPOSITION` | "Bill of Supply" | yes | none | at the top: "Composition taxable person, not eligible to collect tax on supplies" |
+| `BILL_UNREGISTERED` | "Bill" | no | none | |
+
+**Every bill also prints:**
+- the legal name; the premises' name, address, state and phone;
+- the number and date;
+- the patient's name; the prescriber's name and registration number;
+- per line: the item, its HSN, each batch with its expiry, the quantity with its unit, the MRP, the price, the discount and the net;
+- the total, any round-off and the amount payable;
+- the footer, "Issued by {name}", and a line for the authorised signatory.
+
+A cancelled bill prints "CANCELLED on {date} ({reason})" across it.
+
+**Place of supply.** In Milestone 1 the patient is at the premises, so every supply is within the premises' state: CGST + SGST, never IGST.
+
+**Numbering (R8-2).**
+- `{prefix}/{FY}/{seq}`, with `seq` zero-padded to 5 digits; a credit note's is `C` + 4 digits (`AG/2627/C0001`). Both widen if ever needed, within the CHECK of 16 characters.
+- `FY` is the financial year of the bill's IST date (1 April – 31 March), written `2627`.
+- **Gapless:** the issuing transaction takes the `billing_series` row `FOR UPDATE` (inserting it at 0 if absent), raises `last_seq` and inserts the bill. A rolled-back dispense rolls the counter back too.
+- The series row is locked **last**, after every stock row, so the lock order of §9.1 holds.
+- A cancelled bill keeps its number; numbers are never reused.
+
+**Tax, per line (R8-3).** The price is GST-inclusive (the MRP caps it, §11.2). For a line with `net_paise = N` and `gst_rate_bp = r`:
+- `taxable = ⌊(2·N·10000 + (10000 + r)) / (2·(10000 + r))⌋` (round half up, in integers);
+- `tax = N − taxable`; `CGST = ⌈tax / 2⌉`; `SGST = ⌊tax / 2⌋`;
+- so `taxable + CGST + SGST = N` exactly, on every line.
+- Outside `TAX_INVOICE`: `gst_rate_bp` is NULL, `taxable = N`, no tax.
+- `r` is the rate for the item's HSN effective on the bill's IST date (`item_tax_rates`). A rate of 0 prints as 0 %.
+
+**Totals.** `total = Σ N`. With `billing_round_off`, `payable` is `total` rounded half up to whole rupees, and `round_off = payable − total` (−49 … +50 paise). Without it, `payable = total`.
+
+**Worked examples** (06b DBL-*), under `TAX_INVOICE`:
+- 7 PCM tablets at 300 paise, GST 500 bp: `N = 2100`; taxable `2000`; CGST `50`; SGST `50`.
+- 1 tube of SUN at 65000, GST 1800 bp: `65000 × 10000 / 11800 = 55084.74…`, so taxable `55085`; tax `9915`; CGST `4958`; SGST `4957`.
+- Together: total `67100`, round-off `0`. A total of `67149` is payable as `67100` (round-off `−49`), and `67150` as `67200` (`+50`).
+
+**Credit notes (R8-4).** For a patient return of `q` base units from a bill line of `Q` base units and net `N`:
+- the value is `⌊(2·N·q + Q) / (2·Q)⌋` (round half up), except that the return bringing the line's returned total to `Q` takes `N` minus what earlier credit notes on that line took, so the credits on a line add up to `N` exactly;
+- the tax is worked back from that value at the bill line's rate, as above;
+- the credit note names the bill's number and date. Money paid back to the patient is not recorded (R8-6).
+- Example: 3 of the 7 PCM tablets come back: value `900`, taxable `857`, CGST `22`, SGST `21`. The other 4 later: `2100 − 900 = 1200`.
+
+**What a premises' settings may not do:**
+- bill where the mode cannot dispense: 422 `BILLING_NOT_ALLOWED`;
+- set any mode but `BILL_UNREGISTERED` without a GSTIN on the premises: 422 `GSTIN_REQUIRED`. Removing the GSTIN (M-04) while such a mode is set: 409 `GSTIN_IN_USE`;
+- set a mode without the legal name, the prefix and the round-off choice: 422 `BILLING_DETAILS_REQUIRED`;
+- take a prefix another premises of the organisation has ever used: 409 `PREFIX_TAKEN`.
+
+A change applies to bills issued after it; issued bills keep their snapshots.
+
 ---
 
 ## 12. API (Next.js route handlers)
@@ -1766,7 +1858,7 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | E-03 | `PUT /dispensary/settings` (`If-Match`) | `stock.settings` | 412 |
 | E-04 | `GET /dispensary/premises` | `stock.view` | the caller's premises with stock settings and locations |
 | E-05 | `POST /dispensary/premises/{id}/setup` | `stock.settings` + grant `premises.legal_settings` | mode (no default), licences, register fields, prescription age; creates the default and quarantine locations |
-| E-06 | `PUT /dispensary/premises/{id}/settings` (`If-Match`) | `stock.settings` + grant `premises.legal_settings` | 422 `MODE_NOT_AVAILABLE` |
+| E-06 | `PUT /dispensary/premises/{id}/settings` (`If-Match`) | `stock.settings` + grant `premises.legal_settings` | 422 `MODE_NOT_AVAILABLE`. From PR 11 it also takes the billing fields (D-49, §11.5). |
 | E-07 | `PATCH /dispensary/locations/{id}` | `stock.settings` | rename |
 | E-08 | `GET /dispensary/master?q=&salt=` | any member | global |
 | E-09 | `GET /dispensary/master/{id}` | any member | |
@@ -1788,12 +1880,12 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | E-25 | `POST /dispensary/goods-receipts/{id}/post` | `stock.receive` | |
 | E-26 | `POST /dispensary/goods-receipts/{id}/discard` | `stock.receive` | |
 | E-27 | `POST /dispensary/dispenses/preview` | `stock.dispense` | read-only |
-| E-28 | `POST /dispensary/dispenses` | `stock.dispense` (+ `stock.backdate` / `stock.backdate_extended`) | optional `prescriptionId` + per-line `prescriptionLineId` |
+| E-28 | `POST /dispensary/dispenses` | `stock.dispense` (+ `stock.backdate` / `stock.backdate_extended`) | optional `prescriptionId` + per-line `prescriptionLineId`; where the premises bills, the 201 carries `bill: {id, number}` (D-49) |
 | E-28a | `GET /dispensary/prescriptions/{id}/dispensable` | `stock.dispense` + `rx.view` | the prescription's lines beside the stock items staff may pick for each; for MR-18 lines, the remaining prescribed quantity. Pre-selected where the line has an `item_id`; never auto-dispensed. |
 | E-29 | `GET /dispensary/dispenses?patientId=&premisesId=&prescriptionId=&from=&to=` | `dispense.view` | |
 | E-30 | `GET /dispensary/dispenses/{id}` | `dispense.view` | |
 | E-31 | `POST` / `GET /dispensary/procedure-uses`, `GET …/{id}` | `stock.dispense` / `stock.view` | the patient link appears only for callers with `dispense.view` |
-| E-32 | `POST` / `GET /dispensary/patient-returns`, `GET …/{id}` | `stock.dispense` / `dispense.view` | |
+| E-32 | `POST` / `GET /dispensary/patient-returns`, `GET …/{id}` | `stock.dispense` / `dispense.view` | the 201 carries `creditNote: {id, number}` when the dispense was billed (D-49) |
 | E-33 | `POST` / `GET /dispensary/supplier-returns`, `GET …/{id}` | `stock.writeoff` (+ grant) / `stock.view` | |
 | E-34 | `POST` / `GET /dispensary/adjustments`, `GET …/{id}` | `stock.writeoff` (write-off kinds) or `stock.adjust` (+ grant) / `stock.view` | |
 | E-35 | `POST` / `GET /dispensary/reversals` | `stock.adjust` + grant `stock.reverse` / `stock.view` | |
@@ -1808,6 +1900,10 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | E-46 | `GET /dispensary/insights?premisesId=&period=&from=&to=` | `stock.reports` | D-48, §14. `period` in (`today`, `yesterday`, `this_week`, `last_week`, `this_month`, `last_month`, `last_30_days`, `custom`); `custom` needs `from` and `to` (≤ 366 days, else 422 `PERIOD_TOO_LONG`). Returns the measures and the previous period's. |
 | E-45 | `GET /dispensary/reports/stock-statement?premisesId=&from=&to=&format=` | `stock.view` | D-47, §14. `premisesId` omitted = the organisation (the caller's premises; the owner: all); `format` = `json` (default), `csv` or `print`; 422 `PERIOD_TOO_LONG` (> 366 days). It holds no patient data, so it needs no signing grant; an export is still audited (`report.exported`). |
 | E-44 | `POST /dispensary/imports/{id}/{validate, commit, abandon}` | `stock.import` (+ grant `stock.import_commit` for commit) | 409 `IMPORT_HAS_ERRORS`, `IMPORT_ALREADY_COMMITTED` |
+| E-47 | `GET /dispensary/bills?premisesId=&from=&to=&status=&q=` | `dispense.view` | D-49. Bills and credit notes, newest first; `q` matches a number. Each row: number, date, kind, status, patient name, amount payable. |
+| E-48 | `GET /dispensary/bills/{id}?format=&layout=` | `dispense.view` | `format` = `json` (default) or `print`; `layout` = `a5` (default) or `roll80` |
+| E-49 | `GET /dispensary/credit-notes/{id}?format=&layout=` | `dispense.view` | as E-48 |
+| E-50 | `GET /dispensary/reports/sales-register?premisesId=&from=&to=&format=` | `stock.reports` | D-49, §14. **`premisesId` required**; `format` = `json`, `csv` or `print`; 422 `PERIOD_TOO_LONG` (> 366 days). It holds no patient data, so it needs no signing grant; an export is audited (`report.exported`). |
 
 `GET /api/health` is public and returns only `{ok, schemaVerified}`.
 
@@ -1836,6 +1932,7 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
   "lines": [{ "lineNo": 1, "qtyBase": 15, "grossPaise": 6750, "netPaise": 6750,
               "allocations": [{ "batchId": "uuid", "batchNo": "PCM2312", "expiryDate": "2026-12-31",
                                 "qtyBase": 15, "selection": "FEFO" }] }],
+  "bill": { "id": "uuid", "number": "AG/2627/00001" },        // where the premises bills (D-49); otherwise null
   "warnings": [{ "code": "NEAR_EXPIRY", "lineNo": 1 }] }
 // 409
 { "error": "Not enough stock for line 1.", "code": "INSUFFICIENT_STOCK", "requestId": "…",
@@ -1891,6 +1988,7 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 |---|---|---|---|
 | **Schedule H1 register** | **per premises** (required) | `dispense_lines` with `'H1' = ANY(schedule_flags_snapshot)`, joined to `dispenses` (snapshots) and allocations → `batches` | • Date **and time** of supply (IST, from `occurred_at`) **and** date and time recorded (`recorded_at`), **on every row** (D-10).<br>• The prescriber's name, registration number and council, and address.<br>• The patient's name.<br>• The medicine (name + strength snapshot).<br>• Quantity (base units and as entered).<br>• Batch number and expiry.<br>• The prescription's serial (or its short id) when linked.<br>• The configured extras.<br>**Reversed dispenses stay**, marked "Reversed on … (reason)". |
 | **Purchase register** (Schedule K record) | **per premises** (required) | `goods_receipt_lines` of `POSTED`/`REVERSED` GRNs at that premises, with the supplier snapshot | invoice number and date; **received at** and **recorded at**; the supplier's name, address, GSTIN, licence numbers and validity; item; the manufacturer's name **and address**; batch; expiry; qty; free qty; rate; MRP. Reversed GRNs are marked, never removed. |
+| **Sales register** (D-49) | **per premises** (required) | `bills` and `credit_notes` issued at that premises in the period (by IST date) | • Every bill and credit note: number, date, status, taxable value, CGST, SGST, total, round-off, payable. Cancelled ones are listed and left out of the totals.<br>• **HSN summary:** per HSN and rate, the quantity (base units, with the unit), taxable value, CGST and SGST: bills less credit notes.<br>• **Document summary:** per series, the first and last number, how many were issued and how many cancelled.<br>• No patient field. The CA files from it; the app files nothing (§20). |
 | **Entry-lag report** (D-12) | per premises | every backdatable header | The distribution of `recorded_at − occurred_at` by role and document type, and the share needing a reason. This is the pilot data used to tune `backdate_reason_after_minutes`. It is not a register and holds no patient fields. |
 | **Lapsed-container use** (P1-C, D-16) | per premises | `procedure_use_allocations` with `lapse_override_reason` | date, prescriber, item, batch, container, units, minutes past `discard_after`, reason. Empty under `BLOCK`. No patient name: the procedure-use id is a link for `dispense.view` holders. |
 | **Stock statement** (D-47) | **per premises**, or the organisation (the sum of its premises); a period of IST dates `from` … `to` | `stock_movements` by `occurred_at` (IST day), never the cache | Per item, in base units with packs alongside ("3 strips + 5 tab"):<br>• **Opening** = Σ `qty_delta` before the start of `from`;<br>• **Received** = `RECEIPT`;<br>• **Issued** = `DISPENSE` + `PROCEDURE_USE` (shown as a positive number);<br>• **Returned** = `PATIENT_RETURN`;<br>• **Other** (signed) = `OPENING_BALANCE`, `EXPIRY_WRITEOFF`, `DAMAGE_WRITEOFF`, `SUPPLIER_RETURN`, `STOCKTAKE_ADJUSTMENT`;<br>• **Balance** = Opening + Received − Issued + Returned + Other, which equals Σ `qty_delta` up to the end of `to`.<br>A `REVERSAL` counts in the column of the movement it reverses, on its own date (a dispense reversed the next day lowers the next day's Issued). Quarantined stock is in the balance and also shown on its own. Items with no movement in the period and a zero balance are left out unless asked for. No patient field. |
@@ -1986,11 +2084,12 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | Stock overview | Search by name or salt. On-hand per premises (base units + packs). Badges `LOW`, `NEAR EXPIRY (≤ N d)`, `EXPIRED STOCK`, `DISCARD PENDING` (P1-C). |
 | Item detail | Units; batches (expiry, on-hand per location, MRP); the full ledger history (type, qty, batch, actor, time in IST, document link). Read-only: no edit affordance exists. **No patient names.** |
 | Receive stock (GRN) | A supplier picker with a licence-status chip; line entry with expiry as `MM/YYYY`; save a draft; post after reviewing the warnings. |
-| Dispense | **Opened only from a patient or a prescription record**, never free-floating at an RMP premises.<br>• **From a prescription:** each transcribed line (medicine as written, quantity as written, remaining prescribed quantity for MR-18 items) sits beside a stock-item picker and the photo. A line's matched item is pre-selected; nothing is auto-dispensed, and lines not dispensed stay visibly undispensed.<br>• **On every line:** the dispensable on-hand at this premises; the FEFO suggestion with an optional batch override; an MRP ceiling hint; salt-based alternatives as information only (choosing one needs a substitution reason).<br>• **Backdating:** a "handed over earlier" toggle reveals `occurredAt`. A reason is asked only beyond the organisation's reason-free lag, and the toggle is absent for H1/X/NDPS lines.<br>• **Preview, then confirm.** The client generates the idempotency key once per confirm dialog, so a double click reuses it. |
+| Dispense | **Opened only from a patient or a prescription record**, never free-floating at an RMP premises.<br>• **From a prescription:** each transcribed line (medicine as written, quantity as written, remaining prescribed quantity for MR-18 items) sits beside a stock-item picker and the photo. A line's matched item is pre-selected; nothing is auto-dispensed, and lines not dispensed stay visibly undispensed.<br>• **On every line:** the dispensable on-hand at this premises; the FEFO suggestion with an optional batch override; an MRP ceiling hint; salt-based alternatives as information only (choosing one needs a substitution reason).<br>• **Backdating:** a "handed over earlier" toggle reveals `occurredAt`. A reason is asked only beyond the organisation's reason-free lag, and the toggle is absent for H1/X/NDPS lines.<br>• **Preview, then confirm.** The client generates the idempotency key once per confirm dialog, so a double click reuses it.<br>• **Where the premises bills (D-49):** prices are pre-filled with the MRP ceiling; the preview shows the bill's totals and GST; after confirming, **Print bill** opens the print view (A5 or 80 mm roll, remembered per browser). |
 | Procedure use | From a patient, with an optional procedure type. For a multi-dose item (P1-C), shows the open container's remaining units and a countdown to `discardAfter`. A lapsed container blocks use and offers one-click "Discard remaining N units". Under the `DOCTOR_OVERRIDE` policy, a prescriber-linked user sees "Use anyway", which needs a reason and the signing PIN. |
 | Returns & write-offs | A patient return starts from a dispense (allocations, returnable qty, disposition). Supplier return. Write-off with a mandatory reason. Reversal with a mandatory reason, showing what will be undone. Each of the last three asks for the signing PIN. |
+| Bills (D-49) | A list per premises (number, date, patient, amount payable, status; search by number). Open → the print view; reprint any time. A patient's bills also appear on their record, and a return shows its credit note. |
 | Registers & reports | Premises (required for registers), IST date range, preview, CSV, print view |
-| Settings | **Organisation:** lock minutes, day reset, untrusted idle. **Premises:** address, state, GSTIN, mode (with an explanation of each), licences, register fields, prescription age. **Staff, roles, devices** (with "Trust this PC"), **audit log**, **suppliers**, **prescribers**, **procedure types**, location names. |
+| Settings | **Organisation:** lock minutes, day reset, untrusted idle. **Premises:** address, state, GSTIN, mode (with an explanation of each), licences, register fields, prescription age, **billing** (the mode with an explanation of each, legal name, number prefix, phone, footer, round-off; signing PIN). **GST rates per HSN** (an item without one is marked wherever a premises issues tax invoices). **Staff, roles, devices** (with "Trust this PC"), **audit log**, **suppliers**, **prescribers**, **procedure types**, location names. |
 
 **Dashboard:** low stock, near expiry and discard pending appear as count chips linking to the stock overview. There is no other notification mechanism in v1.
 
@@ -2009,7 +2108,7 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 - **Ritu voice.** No connection. No voice tool reads or changes this app's data.
 - **Ritu Desk Spec 07.** This spec does not depend on it (D-29). Spec 07 stays Ritu Desk work on its own track.
 - **Prescribing.** This app records prescriptions; it never writes one, suggests a drug, or computes a dose or quantity.
-- **Billing.** Phase 1 stores price snapshots only. GST invoices are designed once 06 OQ-3 is answered.
+- **Billing (D-49).** A bill per sale and a credit note per return, printed at the counter (§11.5). No payments, dues or refunds are recorded; nothing is filed with GST (§20). Bills are never sent over WhatsApp.
 - **AI.** None anywhere in the app (§0.7).
 
 ---
@@ -2067,20 +2166,22 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | 016 | `stock_locations` | 5 |
 | 017 | `items`, `item_units` (+ the unit-immutability and `requires_prescription` triggers); includes the nullable multi-dose columns | 5 |
 | 018 | `suppliers` | 5 |
-| 019 | `patients` | 6 |
-| 020 | `prescriptions`, `prescription_lines` (+ immutability triggers) | 6 |
-| 021 | `prescription_images` | 6 |
-| 022 | `batches` (per premises) | 7 |
-| 023 | `stock_movements` + `stock_balances` + the validate / apply / as-of / append-only triggers; `items_freeze`. The ledger and its cache are one logical change: the cache is defined by the trigger. | 7 |
-| 024 | `idempotency_keys` | 7 |
-| 025 | `goods_receipts` (+ lines; posted-immutability trigger) | 8 |
+| 019 | `batches` (per premises) | 7 |
+| 020 | `stock_movements` + `stock_balances` + the validate / apply / as-of / append-only triggers; `items_freeze`. The ledger and its cache are one logical change: the cache is defined by the trigger. | 7 |
+| 021 | `idempotency_keys` | 7 |
+| 022 | `goods_receipts` (+ lines; posted-immutability trigger) | 8 |
+| 023 | `patients` | 6 |
+| 024 | `prescriptions`, `prescription_lines` (+ immutability triggers) | 6 |
+| 025 | `prescription_images` | 6 |
 | 026 | `dispenses` (+ lines, allocations, the L-25 trigger); includes the nullable `LICENSED_PHARMACY` and backdate columns (R6-9) | 9 |
 | 027 | `patient_returns` (+ lines) | 10 |
 | 028 | `stock_adjustments` (+ lines: write-offs, stock-count corrections incl. found stock; `opened_container_id` nullable, its FK added in Milestone 2) | 10 |
 | 029 | `stock_reversals` | 10 |
-| 030 | `stock_imports`, `stock_import_rows` | 13 |
+| 030 | `item_tax_rates` (D-49; was Milestone 2) | 11 |
+| 031 | `billing_series`, `bills`, `bill_lines`, `credit_notes`, `credit_note_lines` (+ the append-only and cancellation triggers); the billing columns on `premises_settings` (nullable, R6-8) | 11 |
+| 032 | `stock_imports`, `stock_import_rows` | 14 |
 
-**Milestone 2, numbered when built:** `otp_challenges`, `item_tax_rates`, `procedure_types`, `patient_merges` (+ the `patient_canonical` view), `opened_containers` (+ the FK on `stock_adjustment_lines`), `procedure_uses`, `supplier_returns`, `outbox_events`, `ledger_reconciliation_runs`, `master_correction_requests` (+ the `curation_*` policies).
+**Milestone 2, numbered when built:** `otp_challenges`, `procedure_types`, `patient_merges` (+ the `patient_canonical` view), `opened_containers` (+ the FK on `stock_adjustment_lines`), `procedure_uses`, `supplier_returns`, `outbox_events`, `ledger_reconciliation_runs`, `master_correction_requests` (+ the `curation_*` policies).
 
 - **Every table is created with the §2.6 keys from the start:** `PRIMARY KEY (org_id, id)`, composite FKs (with `premises_id` where stock is named), and `org_id` in every unique constraint.
 - **Adding to an earlier table** (R6-8): a later migration may add a nullable column, an index, a constraint (`NOT VALID`, then validated) or an FK. It never drops, renames or retypes anything, and the previous app version keeps working (06b DMG-08, DMG-11).
@@ -2098,6 +2199,8 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 
 **Branches:** each PR is a branch based on the previous one (`m1/pr-01-foundation`, `m1/pr-02-…`). The spec branch is its base.
 
+**Build order (D-50):** 1–5, then 7, 8, 6, 9, 10, then 11–15. "The previous one" is the PR built just before; PR 7's base is PR 5.
+
 | PR | Contents | Migrations | Gate (06b) |
 |---|---|---|---|
 | **1** | **Foundation:**<br>• the Next.js 14 scaffold;<br>• `lib/db` (pool, `withTenant`, the int8 parser);<br>• the migration runner, which fails the deploy on any error and checks checksums;<br>• `ops/bootstrap-roles.sql`;<br>• the self-check and the 503 gate; `GET /api/health`;<br>• the real-Postgres harness;<br>• the catalog, isolation and route-inventory checks. | 001 | DS-01 … 10, 13 … 15, 17 … 21; DMG-01 … 05, 07 … 09, 12 … 14; DH-05, 07, 12; DX-76 |
@@ -2105,15 +2208,16 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | **3** | **The shared PC:** trusted devices, "Who's working?", the idle lock, the switch PIN, the signing PIN with the pepper, re-auth grants (A-08 … A-12, A-14, A-15); **the per-username sign-in limit (D-45)**; the device endpoints M-10, M-11 and their screen (DW-01, DW-15 need them) | 011–012 | DW, DPN-01 … 11, 13 … 17, DN-02 … 05, 22, 23 (D-45), DX-05 … 08, DX-18 |
 | **4** | **Administration:** premises, staff, roles, the audit view (M-01 … M-09, M-12) and their screens; the UI kit copied in (the devices endpoints are built in PR 3) | — | DI (administration rows), DX-09 … 17, DX-19 |
 | **5** | **Catalogue and settings:** the minimal master, stock and premises settings, locations, items and units, suppliers (E-01 … E-09, E-12 … E-18, E-20, E-21) | 013–018 | DG-01 … 03, 05 … 07, 09 … 11 (DG-08 and the dispense halves of DG-05 and DG-09 with PR 9); DX-33 … 37, 39 … 42, 45 |
-| **6** | **People:** patients, prescribers, prescriptions (manual and photo) (P-01 … P-13) | 019–021 | DRX-01 … 16; DX-20 … 31 |
-| **7** | **Ledger:** batches, movements, balances, triggers, idempotency (also on the administration writes, 06 R7-2); the catalogue's ledger reads: E-18, E-14's batches and balances, E-12's stock filters (so the Stock page shows each item's **balance**, D-47); `items_freeze` | 022–024 | DL (M1 rows), DP-01 … 08, 10, 12; DA; DK-01 … 03; DX-43 |
-| **8** | **Receiving stock** (E-23 … E-26) | 025 | DO-01 … 04; DM-04 … 06; DX-46 … 49 |
+| **6** | **People:** patients, prescribers, prescriptions (manual and photo) (P-01 … P-13) | 023–025 | DRX-01 … 16; DX-20 … 31 |
+| **7** | **Ledger:** batches, movements, balances, triggers, idempotency (also on the administration writes, 06 R7-2); the catalogue's ledger reads: E-18, E-14's batches and balances, E-12's stock filters (so the Stock page shows each item's **balance**, D-47); `items_freeze` | 019–021 | DL (M1 rows), DP-01 … 08, 10, 12; DA; DK-01 … 03; DX-43 |
+| **8** | **Receiving stock** (E-23 … E-26); **the stock statement (E-45, D-47), moved here by D-50,** with print and CSV | 022 | DO-01 … 04; DM-04 … 06; DX-46 … 49; DR-17 … 20 for the movements that exist by then (receipts, opening balances), completed as PRs 9 and 10 add theirs; DX-81 |
 | **9** | **Dispensing:** allocation (FEFO), preview and dispense, the M1 mode rules, `requires_prescription` (E-27 … E-30) | 026 | DE (dispensing rows), DU (except DU-17), DK, DM (M1 rules), DO (dispense rows), DC-01 … 04, 10, 11; DX-50 … 58 |
 | **10** | **Returns and corrections:** patient returns, write-offs, **stock-count corrections incl. found stock** (D-42), reversals (E-32, E-34, E-35) | 027–029 | DE-10 … 16, 20; DO (return, reversal and adjustment rows); DC-05 … 07; DPN-13; DX-60, 62, 63 |
-| **11** | **Views and registers:** stock overview, low stock, near expiry; **the stock statement (E-45, D-47)**; the H1 and purchase registers, print and CSV (E-38 … E-40) | — | DR (M1 rows, DR-17 … 20 included); DX-65 … 68, DX-81 |
-| **12** | **Insights (D-48):** the page and E-46; the consumption, valuation and non-moving reports | — | DR-08, DR-09, DR-21 … 24; DX-82 |
-| **13** | **CSV import of opening stock** (E-41 … E-44) | 030 | DIM (CSV rows); DX-69 … 72 |
-| **14** | **Pilot readiness:** the stock screens finished; an end-to-end "day at one premises" test; a demo seed script | — | the Milestone 1 gate (06b §30) |
+| **11** | **Billing (D-49):** GST rates per HSN (E-19); the billing settings on premises (E-06); a bill on every dispense where the premises bills, cancelled with its reversal; credit notes with patient returns; the print views and the bill list (E-47 … E-49); the sales register (E-50) | 030–031 | DU-17; DBL-01 … 16; DX-83 … 86 |
+| **12** | **Views and registers:** stock overview, low stock, near expiry; the H1 and purchase registers, print and CSV (E-38 … E-40). The stock statement is built in PR 8 (D-50). | — | DR (M1 rows; DR-17 … 20 complete); DX-65 … 68 |
+| **13** | **Insights (D-48):** the page and E-46; the consumption, valuation and non-moving reports | — | DR-08, DR-09, DR-21 … 24; DX-82 |
+| **14** | **CSV import of opening stock** (E-41 … E-44) | 032 | DIM (CSV rows); DX-69 … 72 |
+| **15** | **Pilot readiness:** the stock screens finished; an end-to-end "day at one premises" test; a demo seed script | — | the Milestone 1 gate (06b §30) |
 
 Each PR follows the same order: migrations → queries/service → tests → routes → UI.
 
@@ -2133,6 +2237,7 @@ Each PR follows the same order: migrations → queries/service → tests → rou
 - **Selling and money:**
   - online ordering or delivery;
   - any WhatsApp flow that sells, orders or takes payment for medicines;
+  - recording payments, dues or refunds (a bill records what was charged, D-49);
   - distributor scheme accounting, GSTR filing, e-way bills, e-invoicing, Tally sync;
   - loyalty programmes, MR commission, insurance.
 - **Clinical decision support:** no dose calculation, no interaction checking, no automatic substitution. `in_use_hours` is copied from the label, never computed.
