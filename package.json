@@ -1,0 +1,35 @@
+{
+  "name": "clinic-pharmacy-tool",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone, multi-tenant clinic pharmacy and stock app (Spec 06, docs/specs/).",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "prestart": "node scripts/migrate.cjs",
+    "db:migrate": "node scripts/migrate.cjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test.mjs",
+    "check:migrations": "node scripts/check-migrations.mjs",
+    "check:db-access": "node scripts/check-db-access.mjs",
+    "gate": "npm run check:migrations && npm run check:db-access && npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "next": "^14.2.35",
+    "pg": "^8.13.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.6",
+    "@types/pg": "^8.11.10",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "tsx": "4.23.13",
+    "typescript": "^5.6.3"
+  }
+}
