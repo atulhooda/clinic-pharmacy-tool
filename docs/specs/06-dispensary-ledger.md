@@ -114,6 +114,7 @@
 | R6-11 | **`staff_users.password_failures` and `password_paused_until` stay, unused** | Migrations never drop a column (R6-8); nothing has been released, so a later contract migration can remove them |
 | R6-12 | **The 5th failure itself answers 429,** and so does every try during the next 15 minutes, including a right password. Failures count in a 15-minute window from the first one; a success clears the count. | The person learns about the pause when it starts. Both cases run the same code path, so the answer reveals nothing about whether the account exists. |
 | R6-13 | **The trusted-device allowance stays** (5 failures per username per device before they count, DN-05), keyed by the submitted username too | A mistyping colleague at the front desk should not lock someone out; keyed by username, it treats real and unknown usernames alike |
+| R6-14 | **A global census of PIN hashes per pepper version, `pin_pepper_census`,** kept by a trigger | The startup check must know which pepper versions stored hashes use before any session exists. A count per version holds no tenant data, so it needs no new door past RLS (06a §2.4 stays as it is). |
 
 ### Engineer's calls in Rev 4 (under D-3; veto any)
 

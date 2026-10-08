@@ -10,6 +10,11 @@
 **Rev 6.2 changes (founder review of PR 2, D-45, D-46):**
 - Failed sign-ins are counted **per submitted username**, whether or not the account exists; after 5 failures the answer is 429 `too_many_attempts` for both (§3.3, §3.8). The counter moves to a new table, `sign_in_throttle`, holding only an HMAC of the login (§6.1, R6-10).
 - Migration 012 is `sign_in_throttle` (PR 3); the later migrations move up by one (§18, §19).
+- Clarified while building PR 3:
+  - the client sends a re-auth grant in the `Reauth-Grant` header; A-12 takes `{pin | password, purpose, entityId}` (§3.7, §12.3);
+  - a browser holding a valid trusted-device cookie must use a session of that device (§3.5);
+  - the pepper-version check reads a global census table, `pin_pepper_census`, kept by a trigger; the retire step is a script (§2.6 rule 5, §3.12, §6.1);
+  - the device endpoints M-10 and M-11, and their screen, are built in PR 3, because DW-01 and DW-15 need them (§19).
 
 **Rev 6.1 changes (founder round 7, D-42 … D-44):**
 - Stock-count corrections, including found stock, are Milestone 1; the dispensing PR is split in two (§19: PR 9 dispensing, PR 10 returns, write-offs, count corrections, reversals). Milestone 1 is now 13 PRs.
@@ -276,7 +281,8 @@ If any check fails, every `/api/*` route except `GET /api/health` returns **503 
    - outbox dedupe keys.
 5. **Reviewed exceptions** (06b DMG-14 fails on any other):
    - `organisations`, the tenant root: primary key `id`, UNIQUE `slug`; every tenant table's `FOREIGN KEY (org_id) REFERENCES organisations (id)`.
-   - `medicine_master`, the only global table. Tenant rows reference it with a single-column FK (`items.master_id`, `stock_import_rows.matched_master_id`, `master_correction_requests.master_id`). That is safe because the master holds no tenant data.
+   - `pin_pepper_census` (R6-14): a global count of PIN hashes per kind and pepper version, kept by a trigger on `staff_users`. It holds no organisation, no person and no hash, only `(kind, version, hashes)`.
+   - `medicine_master`, the only global table with catalogue data. Tenant rows reference it with a single-column FK (`items.master_id`, `stock_import_rows.matched_master_id`, `master_correction_requests.master_id`). That is safe because the master holds no tenant data.
    - `audit_log`'s staff, session and device ids, which are deliberately not FKs (§6.1).
    - the runner's `schema_migrations`.
 6. **Sequence numbers.** The `seq` identity columns come from shared sequences. They are used only for ordering inside the database and **never returned by the API**, because gaps would hint at other organisations' volume.
@@ -371,7 +377,7 @@ Either method creates a session (§3.4). **Milestone 1 ships password sign-in on
    - "Someone else" opens the full sign-in.
 4. **One active person at a time.** A request carrying a session that is not the device's active session gets **401 `device_locked`**, so a second browser tab still holding the previous person's cookie cannot act.
    - **No write straddles a switch.** A write reads the device's `device_state` row `FOR SHARE` inside its own transaction. A switch or lock updates that row, so it waits for any in-flight write to finish. A write therefore never commits after the person at the PC has changed (06b DC-11).
-5. **Bound to its device.** A session created on a device is accepted only with that device's cookie (401 `device_mismatch`).
+5. **Bound to its device.** A session created on a device is accepted only with that device's cookie (401 `device_mismatch`). The reverse holds too: a browser holding a valid trusted-device cookie must use a session of that device, so an untrusted session there also gets 401 `device_mismatch`. Trusting a PC (M-10) binds the owner's current session to it. A revoked device's cookie is ignored and cleared.
 6. **Revoking a device** (M-11) ends every session on it at the next request.
 7. **The device's premises** becomes the default premises on every stock screen used from it. It grants nothing: membership (MR-19) is still checked.
 8. **Audit:**
@@ -413,6 +419,7 @@ Either method creates a session (§3.4). **Milestone 1 ships password sign-in on
   ```
 
   No row → 401 `reauth_required`. If the operation fails and rolls back, the grant stays unused.
+- **How the client sends it.** The grant id goes in the `Reauth-Grant` request header, so no request schema carries it.
 - **Secrets accepted:** the signing PIN, or the account password. **Never the switch PIN.**
 - **Failures count against the session.** A try is taken before the secret is checked, and the 5th wrong secret in a session ends that session (401 `session_revoked`).
 - **Purposes** (a closed list in code):
@@ -521,14 +528,14 @@ If the only owner is locked out, the same CLI recovers them (`--reset-owner`), a
 
 - **Hash.** `scrypt(HMAC-SHA256(pepper_v, pin), salt)` with the §1.2 parameters, stored as `scrypt$15$8$1$p<v>$<salt>$<key>`. `p<v>` records which pepper version made the hash; the DB CHECKs that shape on `switch_pin_hash` and `signing_pin_hash`.
 - **Where it lives.** `PIN_PEPPERS` is an environment secret on the web service (a Railway variable), never in the database, logs, backups or the repo. It holds an ordered list `v1:<base64 32 bytes>,v2:<…>`; the highest version is current. The jobs service does not get it.
-- **Startup.** The app refuses to start if `PIN_PEPPERS` is missing, malformed, or has fewer than 32 bytes per entry. It also checks that every pepper version referenced by a stored hash is present (a count by version; no hash leaves the database).
+- **Startup.** The app refuses to start if `PIN_PEPPERS` is missing, malformed, or has fewer than 32 bytes per entry. It also checks that every pepper version referenced by a stored hash is present. That count comes from **`pin_pepper_census`** (R6-14): `(kind, version, hashes)`, kept by a trigger on `staff_users`, global and free of tenant data, so the web app can read it before any session exists. No hash leaves the database. The check runs in `npm start`'s pre-start step (it exits non-zero, naming the failed check and never the value) and in the self-check (every API route answers 503 `CONFIG_INVALID` while it fails).
 - **Passwords** keep plain scrypt: at 8+ characters they are far costlier to guess. The same mechanism can be applied to them later if wanted.
 
 **Rotating the pepper (routine, e.g. yearly or when someone with access leaves):**
 1. Generate a new 32-byte secret, and append `v<n+1>:<secret>` to `PIN_PEPPERS` on the web service. Deploy. New PINs, and every PIN changed from now on, use `v<n+1>`.
 2. **Lazy re-hash.** On every successful PIN check (switch, sign, or set), a hash on an older version is re-hashed with the current one in the same transaction. Staff type their switch PIN daily, so most hashes move within days.
-3. Watch `pin_hash_versions` (the jobs service reports counts per version, never hashes) until the old version's count stops falling, normally 2–4 weeks.
-4. **Retire the old version.** Clear every remaining hash on the old version (`UPDATE … SET switch_pin_hash = NULL WHERE …`, run by the migrator, audited as `auth.pin_pepper_retired {version, cleared}`), then remove the old entry from `PIN_PEPPERS` and deploy. Those people set a new PIN after their next full sign-in (password or OTP). Nothing else changes.
+3. Watch `pin_pepper_census` (counts per version, never hashes) until the old version's count stops falling, normally 2–4 weeks.
+4. **Retire the old version.** Run `scripts/retire-pepper.ts --version <v>` as the migrator. In one transaction it clears every remaining hash on that version in every organisation and writes one `auth.pin_pepper_retired {version, count}` audit row per organisation affected. Because RLS is forced even for the table owner, the script lifts `FORCE` on `staff_users` inside that transaction and restores it before commit; no other transaction can see the change. Then remove the old entry from `PIN_PEPPERS` and deploy. Those people set a new PIN after their next full sign-in (password or OTP). Nothing else changes.
 
 **Rotating after a suspected leak (emergency):** do step 1, then step 4 straight away, skipping the lazy re-hash. Everyone sets new PINs at their next full sign-in. Also rotate `SESSION_SECRET` (it ends every session) if the leak may include it.
 
@@ -742,6 +749,8 @@ Everything is **Phase 1** unless marked. **P1-C** means Phase 1 *conditional* on
 Purged after one day.
 
 **`reauth_grants`**: `session_id`, `staff_user_id` (composite FKs), `purpose` (CHECK in the §3.7 list), `entity_id`, `expires_at` (CHECK `<= created_at + interval '10 minutes'`), `used_at`.
+
+**`pin_pepper_census`** (global, no `org_id`; §3.12, R6-14): `kind` (`switch`, `signing`), `version`, `hashes` (CHECK ≥ 0); primary key (`kind`, `version`). A `SECURITY DEFINER` trigger function owned by the migrator keeps it in step with every insert and update of `staff_users`' PIN hashes. The app role may only read it.
 
 **`sign_in_throttle`** (§3.8, D-45): one row per username tried in the organisation, existing or not.
 
@@ -1688,7 +1697,7 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | A-09 | `POST /api/auth/lock` | self, trusted device | "Switch person": locks now |
 | A-10 | `GET /api/auth/device/people` | the trusted-device cookie | the lock screen: names and roles of the people with an open session on this device |
 | A-11 | `POST /api/auth/device/switch` | the trusted-device cookie | `{sessionId, pin}` (the switch PIN) |
-| A-12 | `POST /api/auth/reauth` | self | `{pin, purpose, entityId}` (the signing PIN or the password) → a single-use grant |
+| A-12 | `POST /api/auth/reauth` | self | `{pin \| password, purpose, entityId}`: exactly one of the signing PIN or the account password → a single-use grant `{grantId, expiresAt}`, sent back in the `Reauth-Grant` header |
 | A-13 | `PUT /api/account/password` | self | `{current, next}` |
 | A-14 | `PUT /api/account/switch-pin` | self | `{pin}`; 422 `PIN_SAME_AS_OTHER`, `PIN_FORMAT` |
 | A-15 | `PUT /api/account/signing-pin` | self | `{pin, password}` or `{pin, otpChallengeId, code}`; 422 `PIN_SAME_AS_OTHER` |
@@ -2023,7 +2032,7 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | 008 | `sessions` | 2 |
 | 009 | `device_state` | 2 |
 | 010 | `audit_log` (+ append-only trigger) | 2 |
-| 011 | `reauth_grants` | 3 |
+| 011 | `reauth_grants`; `pin_pepper_census` and its trigger (the PIN machinery, R6-14) | 3 |
 | 012 | `sign_in_throttle` (D-45) | 3 |
 | 013 | `medicine_master`; `GRANT SELECT` to the app role (the seed is data, loaded by `pharmacy_curator`, R6-5) | 5 |
 | 014 | `stock_settings` + history | 5 |
@@ -2066,8 +2075,8 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 |---|---|---|---|
 | **1** | **Foundation:**<br>• the Next.js 14 scaffold;<br>• `lib/db` (pool, `withTenant`, the int8 parser);<br>• the migration runner, which fails the deploy on any error and checks checksums;<br>• `ops/bootstrap-roles.sql`;<br>• the self-check and the 503 gate; `GET /api/health`;<br>• the real-Postgres harness;<br>• the catalog, isolation and route-inventory checks. | 001 | DS-01 … 10, 13 … 15, 17 … 21; DMG-01 … 05, 07 … 09, 12 … 14; DH-05, 07, 12; DX-76 |
 | **2** | **Staff identity:** org settings, roles and grants, prescribers (table), staff and memberships, devices and sessions (tables), password sign-in (A-01 … A-02, A-06, A-07, A-13, A-16), the guard, the founder CLI, the audit log; the sign-in screen | 002–010 | DN (password rows), DAU, DS/DMG for the new tables, DX-01 … 04 |
-| **3** | **The shared PC:** trusted devices, "Who's working?", the idle lock, the switch PIN, the signing PIN with the pepper, re-auth grants (A-08 … A-12, A-14, A-15); **the per-username sign-in limit (D-45)** | 011–012 | DW, DPN-01 … 11, 13 … 17, DN-02 … 05, 22, 23 (D-45), DX-05 … 08 |
-| **4** | **Administration:** premises, staff, roles, devices, the audit view (M-01 … M-12) and their screens; the UI kit copied in | — | DI (administration rows), DX-09 … 19 |
+| **3** | **The shared PC:** trusted devices, "Who's working?", the idle lock, the switch PIN, the signing PIN with the pepper, re-auth grants (A-08 … A-12, A-14, A-15); **the per-username sign-in limit (D-45)**; the device endpoints M-10, M-11 and their screen (DW-01, DW-15 need them) | 011–012 | DW, DPN-01 … 11, 13 … 17, DN-02 … 05, 22, 23 (D-45), DX-05 … 08, DX-18 |
+| **4** | **Administration:** premises, staff, roles, the audit view (M-01 … M-09, M-12) and their screens; the UI kit copied in (the devices endpoints are built in PR 3) | — | DI (administration rows), DX-09 … 17, DX-19 |
 | **5** | **Catalogue and settings:** the minimal master, stock and premises settings, locations, items and units, suppliers (E-01 … E-09, E-12 … E-18, E-20, E-21) | 013–018 | DG-01 … 03, 05 … 11; DX-33 … 37, 39 … 43, 45 |
 | **6** | **People:** patients, prescribers, prescriptions (manual and photo) (P-01 … P-13) | 019–021 | DRX-01 … 16; DX-20 … 31 |
 | **7** | **Ledger:** batches, movements, balances, triggers, idempotency | 022–024 | DL (M1 rows), DP-01 … 08, 10, 12; DA; DK-01 … 03 |
