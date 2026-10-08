@@ -76,17 +76,24 @@ test('DN-02: an unknown login gets the same answer after one dummy check, and is
   assert.match(audit, /unknown_login/);
 });
 
-test('DN-03: five wrong passwords pause password sign-in; during the pause the right one is refused the same way; live sessions keep working', async () => {
+test('DN-03 (D-45): five wrong passwords: the 5th and every try in the pause answer 429; live sessions keep working', async () => {
   const org = await createOrg('dn3');
   const s = await createStaff(org);
   const live = await signIn(org.slug, s.login, s.password, '10.3.0.1');
-  for (let i = 0; i < 5; i++) assert.equal((await sign(org.slug, s.login, 'wrong-password', '10.3.0.2')).status, 401);
-  const paused = await sign(org.slug, s.login, s.password, '10.3.0.3');
-  assert.deepEqual([paused.status, paused.body.code], [401, 'invalid_credentials']);
+  setClockForTests(IST('2026-10-07T10:00:00'));
+  for (let i = 1; i <= 4; i++) {
+    const r = await sign(org.slug, s.login, 'wrong-password', `10.3.1.${i}`);
+    assert.deepEqual([r.status, r.body.code], [401, 'invalid_credentials'], `try ${i}`);
+  }
+  const fifth = await sign(org.slug, s.login, 'wrong-password', '10.3.1.5');
+  assert.deepEqual([fifth.status, fifth.body.code, fifth.headers.get('retry-after')], [429, 'too_many_attempts', '900']);
+  assert.equal(fifth.body.error, 'Too many attempts. Try again in 15 minutes.');
+  const paused = await sign(org.slug, s.login, s.password, '10.3.1.6');
+  assert.deepEqual([paused.status, paused.body.code], [429, 'too_many_attempts'], 'the right password is refused during the pause');
+  setClockForTests(null);
   assert.equal((await me(live)).status, 200, 'a pause never ends a live session');
-  // After 15 minutes the pause lapses.
-  setClockForTests(new Date(Date.now() + 16 * 60_000));
-  assert.equal((await sign(org.slug, s.login, s.password, '10.3.0.4')).status, 200);
+  setClockForTests(IST('2026-10-07T10:15:01'));
+  assert.equal((await sign(org.slug, s.login, s.password, '10.3.1.7')).status, 200, 'after 15 minutes the right password signs in');
 });
 
 test('DN-04: thirty parallel wrong passwords check at most five', async () => {
@@ -94,7 +101,7 @@ test('DN-04: thirty parallel wrong passwords check at most five', async () => {
   const s = await createStaff(org);
   const before = verifyCounters.real;
   const results = await Promise.all(Array.from({ length: 30 }, (_, i) => sign(org.slug, s.login, `wrong-${i}`, `10.4.${i}.1`)));
-  assert.ok(results.every((r) => r.status === 401));
+  assert.ok(results.every((r) => r.status === 401 || r.status === 429), results.map((r) => r.status).join());
   assert.ok(verifyCounters.real - before <= 5, `checked ${verifyCounters.real - before} passwords`);
 });
 
@@ -177,7 +184,7 @@ test('DN-12: the guard reads the session, user, role, grants and memberships in 
     setQueryListener(null);
   }
   // The self-check runs on every request in tests (TTL 0); its catalog queries are not the guard's.
-  const guard = seen.filter((q) => !/\bpg_[a-z_]+\b|schema_migrations/.test(q));
+  const guard = seen.filter((q) => !/\bpg_[a-z_]+\b|schema_migrations|pin_pepper_census/.test(q));
   assert.equal(guard.length, 1, guard.join('\n---\n'));
   assert.match(guard[0], /FROM sessions s[\s\S]*JOIN staff_users[\s\S]*JOIN org_roles[\s\S]*JOIN organisations/);
 });

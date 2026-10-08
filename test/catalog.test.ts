@@ -123,14 +123,14 @@ test('DMG-09: the server is Postgres 15 or newer', async () => {
 });
 
 test('DMG-14: the reviewed exceptions are exactly the list in 06a §2.6 rule 5', () => {
-  assert.deepEqual([...REVIEWED_EXCEPTIONS.nonTenantTables].sort(), ['medicine_master', 'organisations', 'schema_migrations']);
+  assert.deepEqual([...REVIEWED_EXCEPTIONS.nonTenantTables].sort(), ['medicine_master', 'organisations', 'pin_pepper_census', 'schema_migrations']);
   assert.deepEqual(REVIEWED_EXCEPTIONS.foreignKeysToNonTenant.map((e) => `${e.cols.join()}→${e.refTable}.${e.refCols.join()}`).sort(),
     ['master_id→medicine_master.id', 'matched_master_id→medicine_master.id', 'org_id→organisations.id']);
   assert.deepEqual(REVIEWED_EXCEPTIONS.policies.map((p) => `${p.table}.${p.policy}`).sort(),
     ['master_correction_requests.curation_select', 'master_correction_requests.curation_update', 'organisations.org_directory']);
   const spec = fs.readFileSync(path.join(process.cwd(), 'docs/specs/06a-dispensary-ledger.design.md'), 'utf8');
   const rule5 = spec.slice(spec.indexOf('5. **Reviewed exceptions**'), spec.indexOf('6. **Sequence numbers.**'));
-  for (const name of ['organisations', 'medicine_master', 'items.master_id', 'stock_import_rows.matched_master_id', 'schema_migrations']) {
+  for (const name of ['organisations', 'medicine_master', 'items.master_id', 'stock_import_rows.matched_master_id', 'schema_migrations', 'pin_pepper_census']) {
     assert.ok(rule5.includes(name), `06a §2.6 rule 5 no longer mentions ${name}`);
   }
 });

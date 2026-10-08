@@ -10,7 +10,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "prestart": "node scripts/migrate.cjs",
+    "prestart": "node scripts/migrate.cjs && node scripts/check-startup.cjs",
     "db:migrate": "node scripts/migrate.cjs",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test.mjs",

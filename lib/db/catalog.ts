@@ -8,7 +8,7 @@ import type { Db } from './db';
 /** 06a §2.6 rule 5: the reviewed exceptions. 06b DMG-14 fails on anything else. */
 export const REVIEWED_EXCEPTIONS = {
   /** Tables without org_id. */
-  nonTenantTables: ['organisations', 'medicine_master', 'schema_migrations'],
+  nonTenantTables: ['organisations', 'medicine_master', 'schema_migrations', 'pin_pepper_census'],
   /** Single-column FKs from tenant tables to non-tenant tables. */
   foreignKeysToNonTenant: [
     { refTable: 'organisations', cols: ['org_id'], refCols: ['id'] },

@@ -5,6 +5,10 @@ function secure(): boolean {
   return process.env.NODE_ENV === 'production' || process.env.COOKIE_SECURE === '1';
 }
 
+export function secureFlag(): string {
+  return secure() ? '; Secure' : '';
+}
+
 export function readCookie(header: string | null, name: string): string | undefined {
   if (!header) return undefined;
   for (const part of header.split(';')) {
@@ -20,4 +24,10 @@ export function sessionCookie(token: string, expires: Date): string {
 
 export function clearSessionCookie(): string {
   return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure() ? '; Secure' : ''}`;
+}
+
+/** 06a §2.4: the non-secret cookie that remembers which organisation's sign-in link was used. */
+export const ORG_COOKIE = 'pharm_org';
+export function orgCookie(slug: string): string {
+  return `${ORG_COOKIE}=${encodeURIComponent(slug)}; Path=/; SameSite=Lax; Max-Age=${400 * 24 * 3600}${secureFlag()}`;
 }

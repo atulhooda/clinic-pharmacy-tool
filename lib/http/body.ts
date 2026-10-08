@@ -5,6 +5,8 @@ import { HttpError } from './errors';
  * request can smuggle in a field the route does not expect (e.g. `orgId`, 06b DX-73).
  * Error details name the field and the rule, never the value.
  */
+export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export type Rule = { type: 'string'; min?: number; max?: number; optional?: boolean; pattern?: RegExp };
 type Out<S extends Record<string, Rule>> = { [K in keyof S]: S[K]['optional'] extends true ? string | undefined : string };
 
@@ -42,4 +44,25 @@ export async function strictBody<S extends Record<string, Rule>>(req: Request, s
     out[key] = v;
   }
   return out as Out<S>;
+}
+
+/**
+ * For routes that take no fields (sign-out, activity, lock, revoke): an empty body or `{}` is
+ * fine; any field is refused like strictBody does, so no field can name another user or
+ * session (06b DX-04).
+ */
+export async function emptyBody(req: Request): Promise<void> {
+  const text = await req.text();
+  if (!text.trim()) return;
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw new HttpError(400, 'BAD_JSON', 'The request body must be JSON.');
+  }
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    throw new HttpError(400, 'BAD_JSON', 'The request body must be a JSON object.');
+  }
+  const key = Object.keys(body)[0];
+  if (key !== undefined) throw new HttpError(422, 'UNKNOWN_FIELD', 'The request has a field this route does not accept.', { field: key });
 }

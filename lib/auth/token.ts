@@ -1,4 +1,5 @@
 import { SignJWT, jwtVerify, errors } from 'jose';
+import { sessionSecret } from './keys';
 
 /**
  * The session cookie (06a §3.4): an HS256 JWT {v: 1, org, sid} signed with SESSION_SECRET.
@@ -7,11 +8,7 @@ import { SignJWT, jwtVerify, errors } from 'jose';
 export const SESSION_COOKIE = 'pharm_session';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function key(): Uint8Array {
-  const s = process.env.SESSION_SECRET;
-  if (!s || s.length < 32) throw new Error('SESSION_SECRET must be set to at least 32 characters');
-  return new TextEncoder().encode(s);
-}
+const key = sessionSecret;
 
 export async function signSessionToken(org: string, sid: string, expiresAt: Date): Promise<string> {
   return new SignJWT({ v: 1, org, sid })

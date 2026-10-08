@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import pg from 'pg';
 import { as, type Urls, urls as mainUrls } from './env';
 import { hashPassword } from '../../lib/auth/password';
+import { hashPin } from '../../lib/auth/pins';
 import { BUILTIN_ROLE_ROWS } from '../../lib/db/create-org';
 
 export interface OrgFixture {
@@ -63,29 +64,38 @@ export interface StaffFixture {
   login: string;
   password: string;
   name: string;
+  switchPin: string | null;
+  signingPin: string | null;
 }
 
 let staffN = 0;
 export async function createStaff(
   org: OrgFixture,
   opts: { role?: string; password?: string; login?: string; name?: string; premises?: string[]; mustChange?: boolean;
-          active?: boolean; phone?: string; prescriberId?: string } = {},
+          active?: boolean; phone?: string; prescriberId?: string;
+          /** 06b §2: every person has a switch PIN and a different signing PIN (pass null for none). */
+          switchPin?: string | null; signingPin?: string | null } = {},
 ): Promise<StaffFixture> {
   staffN++;
   const id = randomUUID();
   const login = opts.login ?? `user${staffN}-${id.slice(0, 4)}`;
   const name = opts.name ?? `Staff ${staffN} ${id.slice(0, 4)}`;
   const password = opts.password ?? `correct-horse-${id.slice(0, 8)}`;
-  const hash = await hashPassword(password);
+  const switchPin = opts.switchPin === undefined ? '271828' : opts.switchPin;
+  const signingPin = opts.signingPin === undefined ? '314159' : opts.signingPin;
+  const [hash, switchHash, signingHash] = await Promise.all([
+    hashPassword(password), switchPin ? hashPin(switchPin) : null, signingPin ? hashPin(signingPin) : null]);
   await inOrg(org.orgId, async (c) => {
-    await c.query(`INSERT INTO staff_users (org_id, id, name, login, role_key, password_hash, must_change_password, active, phone_e164, prescriber_id)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [org.orgId, id, name, login, opts.role ?? 'reception', hash, opts.mustChange ?? false, opts.active ?? true, opts.phone ?? null, opts.prescriberId ?? null]);
+    await c.query(`INSERT INTO staff_users (org_id, id, name, login, role_key, password_hash, must_change_password, active, phone_e164, prescriber_id,
+                                            switch_pin_hash, signing_pin_hash)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      [org.orgId, id, name, login, opts.role ?? 'reception', hash, opts.mustChange ?? false, opts.active ?? true, opts.phone ?? null, opts.prescriberId ?? null,
+        switchHash, signingHash]);
     for (const p of opts.premises ?? [org.premisesId]) {
       await c.query('INSERT INTO staff_premises (org_id, staff_user_id, premises_id) VALUES ($1, $2, $3)', [org.orgId, id, p]);
     }
   });
-  return { id, login, password, name };
+  return { id, login, password, name, switchPin, signingPin };
 }
 
 export async function createPrescriber(org: OrgFixture, opts: { kind?: 'INTERNAL' | 'EXTERNAL'; name?: string } = {}): Promise<string> {

@@ -9,12 +9,14 @@ export interface CallResult {
   status: number;
   body: Record<string, any>;
   headers: Headers;
+  /** The first Set-Cookie header (PR 2 tests); all of them are in setCookies. */
   setCookie: string | null;
+  setCookies: string[];
 }
 
 export async function call(
   handler: unknown,
-  opts: { method?: string; path?: string; body?: unknown; cookie?: string; ip?: string; headers?: Record<string, string> } = {},
+  opts: { method?: string; path?: string; body?: unknown; cookie?: string; ip?: string; headers?: Record<string, string>; params?: Record<string, string> } = {},
 ): Promise<CallResult> {
   const headers = new Headers(opts.headers);
   if (opts.body !== undefined) headers.set('content-type', 'application/json');
@@ -25,7 +27,7 @@ export async function call(
     headers,
     body: opts.body === undefined ? undefined : typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body),
   });
-  const res = await (handler as Handler)(req, undefined as never);
+  const res = await (handler as Handler)(req, (opts.params ? { params: opts.params } : undefined) as never);
   const text = await res.text();
   let body: Record<string, any> = {};
   try {
@@ -33,7 +35,8 @@ export async function call(
   } catch {
     body = { raw: text };
   }
-  return { status: res.status, body, headers: res.headers, setCookie: res.headers.get('set-cookie') };
+  const setCookies = res.headers.getSetCookie();
+  return { status: res.status, body, headers: res.headers, setCookie: setCookies[0] ?? null, setCookies };
 }
 
 /** The "name=value" part of a Set-Cookie header, ready to send back. */
@@ -50,3 +53,40 @@ export async function signIn(orgSlug: string, login: string, password: string, i
 }
 
 export const uniqueIp = () => `10.${randomUUID().slice(0, 2).replace(/[^0-9]/g, '1')}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`;
+
+/**
+ * A browser: a cookie jar that sends its cookies on every call and applies every Set-Cookie,
+ * like a real one (06b §3 `as(handle, {device})`). Clone it to model a second tab that kept an
+ * old cookie.
+ */
+export class Browser {
+  jar = new Map<string, string>();
+  constructor(readonly ip = uniqueIp()) {}
+
+  cookieHeader(): string {
+    return [...this.jar].map(([k, v]) => `${k}=${v}`).join('; ');
+  }
+
+  async call(handler: unknown, opts: { method?: string; path?: string; body?: unknown; headers?: Record<string, string>; params?: Record<string, string> } = {}): Promise<CallResult> {
+    const r = await call(handler, { ...opts, cookie: this.cookieHeader() || undefined, ip: this.ip });
+    for (const c of r.setCookies) {
+      const [pair, ...attrs] = c.split(';');
+      const i = pair.indexOf('=');
+      const name = pair.slice(0, i).trim();
+      const value = pair.slice(i + 1).trim();
+      if (!value || attrs.some((a) => /^\s*max-age=0\s*$/i.test(a))) this.jar.delete(name);
+      else this.jar.set(name, value);
+    }
+    return r;
+  }
+
+  clone(): Browser {
+    const b = new Browser(this.ip);
+    b.jar = new Map(this.jar);
+    return b;
+  }
+
+  async signIn(orgSlug: string, login: string, password: string): Promise<CallResult> {
+    return this.call(signInRoute, { body: { orgSlug, login, password }, path: '/api/auth/sign-in' });
+  }
+}

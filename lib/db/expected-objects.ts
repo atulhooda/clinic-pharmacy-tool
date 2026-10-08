@@ -26,4 +26,9 @@ export const EXPECTED_OBJECTS: readonly ExpectedObject[] = [
   { kind: 'constraint', table: 'sessions', name: 'sessions_expiry_cap', since: 8 },
   { kind: 'trigger', table: 'audit_log', name: 'audit_log_append_only', since: 10 },
   { kind: 'constraint', table: 'audit_log', name: 'audit_log_detail_size', since: 10 },
+  { kind: 'constraint', table: 'reauth_grants', name: 'reauth_grants_expiry_cap', since: 11 },
+  { kind: 'constraint', table: 'reauth_grants', name: 'reauth_grants_purpose', since: 11 },
+  { kind: 'security_definer', name: 'pin_pepper_census_apply', owner: 'pharmacy_migrator', since: 11 },
+  { kind: 'trigger', table: 'staff_users', name: 'staff_users_pin_census', since: 11 },
+  { kind: 'constraint', table: 'sign_in_throttle', name: 'sign_in_throttle_login_key', since: 12 },
 ];

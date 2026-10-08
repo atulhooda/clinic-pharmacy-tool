@@ -44,6 +44,8 @@ try {
         MIGRATION_DATABASE_URL: main.urls.migrator,
         SELF_CHECK_TTL_MS: '0',
         SESSION_SECRET: crypto.randomBytes(32).toString('hex'),
+        // 06b §3: a fixed, test-only pepper. Never a production value (DPN-15 … 17).
+        PIN_PEPPERS: `v1:${Buffer.alloc(32, 'test-only-pepper-v1').toString('base64')}`,
       },
     });
     child.on('exit', (c) => resolve(c ?? 1));

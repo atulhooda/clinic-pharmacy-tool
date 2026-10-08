@@ -32,7 +32,12 @@ type Handler<C> = (req: Request, ctx: C) => Promise<Response>;
 export function gated<C = unknown>(handler: Handler<C>): Handler<C> {
   return async (req, ctx) => {
     const status = await getSchemaStatus();
-    if (!status.ok) return apiError(503, 'SCHEMA_UNVERIFIED', 'The database is not in a verified state. Try again shortly.');
+    if (!status.ok) {
+      if (status.failures.every((f) => f.startsWith('config: '))) {
+        return apiError(503, 'CONFIG_INVALID', 'The app is not configured correctly. Try again shortly.');
+      }
+      return apiError(503, 'SCHEMA_UNVERIFIED', 'The database is not in a verified state. Try again shortly.');
+    }
     try {
       return await handler(req, ctx);
     } catch (err) {

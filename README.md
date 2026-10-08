@@ -5,7 +5,7 @@ A standalone, multi-tenant pharmacy and stock app for clinics. The design is **S
 - [06a](docs/specs/06a-dispensary-ledger.design.md): the design;
 - [06b](docs/specs/06b-dispensary-ledger.acceptance.md): the acceptance tests.
 
-**Status:** Milestone 1, PR 2 (password sign-in, roles, the audit log, the sign-in screen). No stock screens yet.
+**Status:** Milestone 1, PR 3 (the shared front-desk PC: trusted PCs, the lock screen, switch and signing PINs, re-auth grants, the per-username sign-in limit). No stock screens yet.
 
 ## Requirements
 
@@ -30,7 +30,7 @@ npm test -- rls   # only the test files whose path contains "rls"
    psql -d pharmacy -c "ALTER ROLE pharmacy_migrator PASSWORD '…'" -c "ALTER ROLE pharmacy_app PASSWORD '…'" \
                     -c "ALTER ROLE pharmacy_ops PASSWORD '…'"
    ```
-2. **Configure.** Copy `.env.example` to `.env.local`, fill in the URLs and a `SESSION_SECRET`, and export them in your shell.
+2. **Configure.** Copy `.env.example` to `.env.local`, fill in the URLs, a `SESSION_SECRET` and `PIN_PEPPERS`, and export them in your shell.
 3. **Migrate and start:**
    ```sh
    npm run db:migrate   # as pharmacy_migrator; exits non-zero on any error
@@ -44,6 +44,10 @@ npm test -- rls   # only the test files whose path contains "rls"
    ```
    Then open `localhost:3000/my-clinic/sign-in`. The first sign-in goes straight to the password change.
 
+**A shared front-desk PC.** The owner opens Settings → Trusted PCs on that PC and trusts it (confirmed with their signing PIN). After that, each person signs in once a day on it; "Switch person" locks it, and the lock screen switches between the people signed in with their switch PIN. It also locks itself after 3 minutes without input.
+
+**Rotating the PIN pepper** (06a §3.12): add `v<n+1>:…` to `PIN_PEPPERS` and deploy; PINs move to it as people use them. Later, retire the old version with `MIGRATION_DATABASE_URL=… npx tsx scripts/retire-pepper.ts --version <n>`, then remove it from `PIN_PEPPERS`.
+
 **How it fails safe:**
-- `npm start` runs the migrations first (`prestart`), so a failed migration stops the start.
+- `npm start` runs the migrations and a configuration check first (`prestart`), so a failed migration or a missing or wrong `PIN_PEPPERS` stops the start.
 - If the database is not in a verified state (wrong role, RLS off, a guard missing, migrations differing from the build), every API route answers `503 SCHEMA_UNVERIFIED`.

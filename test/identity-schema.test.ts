@@ -132,3 +132,45 @@ test('010 / §3.11: audit detail is a small JSON object; actions are dotted lowe
   });
   assert.equal(ops, '42501');
 });
+
+test('011 / §3.7: grant purposes are the closed list; no grant lives over 10 minutes; the app never deletes one', async () => {
+  const org = await createOrg('sch-grants');
+  const s = await createStaff(org);
+  const sid = await inOrg(org.orgId, async (c) => (await c.query(`INSERT INTO sessions (org_id, staff_user_id, method, created_at, expires_at, last_input_at)
+     VALUES ($1, $2, 'PASSWORD', now(), now() + interval '1 hour', now()) RETURNING id`, [org.orgId, s.id])).rows[0].id);
+  const ins = (purpose: string, minutes: number) => tryApp(org,
+    `INSERT INTO reauth_grants (org_id, session_id, staff_user_id, purpose, entity_id, created_at, expires_at)
+     VALUES ($1, $2, $3, $4, $1, now(), now() + make_interval(mins => $5))`, [org.orgId, sid, s.id, purpose, minutes]);
+  assert.equal(await ins('stock.reverse', 2), 'ok');
+  assert.equal(await ins('stock.reverse', 10), 'ok');
+  assert.equal(await ins('stock.reverse', 11), '23514', 'DPN-09: the cap is 10 minutes');
+  assert.equal(await ins('stock.anything', 2), '23514');
+  assert.equal(await tryApp(org, 'DELETE FROM reauth_grants'), '42501');
+});
+
+test('011 / R6-14: the pepper census counts hashes per kind and version by trigger; the app can only read it', async () => {
+  const before = await as('app', async (c) => Object.fromEntries((await c.query('SELECT kind, version, hashes FROM pin_pepper_census')).rows
+    .map((r) => [`${r.kind}:${r.version}`, Number(r.hashes)])));
+  const org = await createOrg('sch-census');
+  const s = await createStaff(org);
+  const after1 = await as('app', async (c) => Object.fromEntries((await c.query('SELECT kind, version, hashes FROM pin_pepper_census')).rows
+    .map((r) => [`${r.kind}:${r.version}`, Number(r.hashes)])));
+  assert.equal(after1['switch:1'] - (before['switch:1'] ?? 0), 1);
+  assert.equal(after1['signing:1'] - (before['signing:1'] ?? 0), 1);
+  await inOrg(org.orgId, (c) => c.query('UPDATE staff_users SET switch_pin_hash = NULL WHERE id = $1', [s.id]));
+  const after2 = await as('app', async (c) => Number((await c.query("SELECT hashes FROM pin_pepper_census WHERE kind = 'switch' AND version = 1")).rows[0].hashes));
+  assert.equal(after2, after1['switch:1'] - 1);
+  for (const sql of ["INSERT INTO pin_pepper_census (kind, version, hashes) VALUES ('switch', 9, 1)", 'UPDATE pin_pepper_census SET hashes = 0']) {
+    assert.equal(await as('app', (c) => c.query(sql).then(() => 'ok', (e) => e.code)), '42501', sql);
+  }
+  assert.equal(await as('app', (c) => c.query("SELECT pin_pepper_census_bump('switch', 'x', 1)").then(() => 'ok', (e) => e.code)), '42501');
+});
+
+test('012 / D-45: the throttle row holds a 43-character HMAC and at most 5 failures; the app never deletes one', async () => {
+  const org = await createOrg('sch-thr');
+  const ins = (h: string, f: number) => tryApp(org, 'INSERT INTO sign_in_throttle (org_id, login_hmac, failures) VALUES ($1, $2, $3)', [org.orgId, h, f]);
+  assert.equal(await ins('B'.repeat(43), 0), 'ok');
+  assert.equal(await ins('someone', 0), '23514', 'never a login in clear');
+  assert.equal(await ins('C'.repeat(43), 6), '23514');
+  assert.equal(await tryApp(org, 'DELETE FROM sign_in_throttle'), '42501');
+});

@@ -79,12 +79,21 @@ test('DX-76: every route method is in the route table, and every endpoint route 
   assert.ok(found.length > 0);
   const spec = fs.readFileSync(path.join(ROOT, 'docs/specs/06b-dispensary-ledger.acceptance.md'), 'utf8');
   const dxRows = spec.split('\n').filter((l) => /^\| DX-\d+ \|/.test(l));
+  // A row may name a range, e.g. "A-13 … A-16": it covers every endpoint id in between.
+  const covered = new Set<string>();
+  for (const l of dxRows) {
+    for (const m of l.matchAll(/\b([A-Z])-(\d{2})\b(?:\s*…\s*\1-(\d{2})\b)?/g)) {
+      const from = Number(m[2]);
+      const to = m[3] ? Number(m[3]) : from;
+      for (let n = from; n <= to; n++) covered.add(`${m[1]}-${String(n).padStart(2, '0')}`);
+    }
+  }
   for (const r of found) {
     const entry = ROUTES.find((e) => e.path === r.path);
     assert.ok(entry, `${r.path} is not in lib/routes.ts`);
     assert.deepEqual([...entry.methods].sort(), r.methods, `${r.path}: methods differ from lib/routes.ts`);
     if (entry.endpoint) {
-      assert.ok(dxRows.some((l) => new RegExp(`\\b${entry.endpoint}\\b`).test(l)), `${entry.endpoint} has no DX row in 06b`);
+      assert.ok(covered.has(entry.endpoint), `${entry.endpoint} has no DX row in 06b`);
     } else {
       assert.ok(entry.isolationNote && entry.isolationNote.length > 10, `${r.path}: an operational route needs an isolation note`);
     }

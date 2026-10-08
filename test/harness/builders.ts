@@ -126,6 +126,16 @@ export const FK_BUILDERS: Record<string, FkBuilder> = {
     const wb = await world(b);
     return inTenant(a, 'INSERT INTO device_state (org_id, device_id) VALUES ($1, $2)', [a.orgId, wb.deviceId]);
   },
+  async reauth_grants_session_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return inTenant(a, `INSERT INTO reauth_grants (org_id, session_id, staff_user_id, purpose, entity_id, created_at, expires_at)
+                        VALUES ($1, $2, $3, 'stock.adjust', $4, now(), now() + interval '2 minutes')`, [a.orgId, wb.sessionId, wa.staffId, a.premisesId]);
+  },
+  async reauth_grants_staff_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return inTenant(a, `INSERT INTO reauth_grants (org_id, session_id, staff_user_id, purpose, entity_id, created_at, expires_at)
+                        VALUES ($1, $2, $3, 'stock.adjust', $4, now(), now() + interval '2 minutes')`, [a.orgId, wa.sessionId, wb.staffId, a.premisesId]);
+  },
   async device_state_session_fk(a, b) {
     const [wa, wb] = [await world(a), await world(b)];
     return inTenant(a, 'INSERT INTO device_state (org_id, device_id, active_session_id) VALUES ($1, $2, $3)', [a.orgId, wa.deviceId, wb.sessionId]);
@@ -179,6 +189,10 @@ export const UNIQUE_BUILDERS: Record<string, UniqueBuilder> = {
     const [wa, wb] = [await world(a), await world(b)];
     return twice(a, b, (o, v) => inTenant(o, 'INSERT INTO devices (org_id, premises_id, name, registered_by) VALUES ($1, $2, $3, $4)',
       [o.orgId, o.premisesId, v === 'again' ? 'front desk' : 'Front Desk', o === a ? wa.staffId : wb.staffId]));
+  },
+  async sign_in_throttle_login_key(a, b) {
+    const hmac = 'A'.repeat(43);
+    return twice(a, b, (o) => inTenant(o, 'INSERT INTO sign_in_throttle (org_id, login_hmac) VALUES ($1, $2)', [o.orgId, hmac]));
   },
   async device_state_device_key(a, b) {
     const [wa, wb] = [await world(a), await world(b)];

@@ -5,6 +5,7 @@ import { wrap, type Db } from './db';
 import { checkRls } from './catalog';
 import { EXPECTED_OBJECTS } from './expected-objects';
 import { listMigrations } from './migration-files.cjs';
+import { parsePeppers, missingVersions, CENSUS_SQL } from '../auth/pepper-config.cjs';
 import { log } from '../log';
 
 /**
@@ -42,11 +43,27 @@ export async function verifySchema(db: Db, migrationsDir = defaultDir()): Promis
 
     // 5. The applied migrations equal the files shipped in this build.
     for (const f of await checkMigrations(db, migrationsDir)) failures.push(`migrations: ${f}`);
+
+    // 6. Configuration (06a §3.12): PIN_PEPPERS is well formed and covers every stored hash.
+    //    Only if the schema is otherwise sound, so the census table is known to exist.
+    if (failures.length === 0) for (const f of await checkConfig(db)) failures.push(`config: ${f}`);
   } catch (err) {
     const code = (err as { code?: string }).code ?? 'unknown';
     failures.push(`check: could not run (${code})`);
   }
   return { ok: failures.length === 0, failures };
+}
+
+/** Names the failed check, never a value (06b DPN-17). */
+export async function checkConfig(db: Db): Promise<string[]> {
+  const secret = process.env.SESSION_SECRET;
+  const problems: string[] = [];
+  if (!secret || secret.length < 32) problems.push('SESSION_SECRET is missing or shorter than 32 characters');
+  const p = parsePeppers(process.env.PIN_PEPPERS);
+  if (!p.ok) return [...problems, p.check];
+  const missing = missingVersions(await db.rows<{ version: number }>(CENSUS_SQL), p.peppers);
+  if (missing.length) problems.push(`stored PIN hashes use pepper version ${missing.join(', ')}, which PIN_PEPPERS lacks`);
+  return problems;
 }
 
 async function checkObjects(db: Db): Promise<string[]> {
