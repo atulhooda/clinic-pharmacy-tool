@@ -26,6 +26,7 @@
   - E-13 creates the item's base unit itself (factor 1, named after the base unit);
   - E-05 needs E-02 first (409 `DISPENSARY_NOT_CONFIGURED`) and runs once per premises (409 `PREMISES_ALREADY_CONFIGURED`); E-07 can also deactivate a further location, never the default store or the quarantine (422 `LOCATION_REQUIRED`);
   - the settings history tables store each change as a full JSON snapshot of the row;
+  - the UI kit copy also brings the desk's shell (sidebar, top bar, page heads) and its fonts through `next/font` (06 R7-4, revised 2026-10-08);
   - the master seed: `data/master/` with `SOURCES.md`; `scripts/load-master.cjs` upserts by (`source`, `source_ref`), a reviewed unique key on the global table; every row is loaded unverified and without schedule flags until the curator confirms them (06 OQ-5, R7-6).
 
 **Rev 6.1 changes (founder round 7, D-42 … D-44):**
