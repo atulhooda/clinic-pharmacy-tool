@@ -5,7 +5,7 @@ import { en } from '@/lib/i18n/en';
 
 const t = en.signIn;
 
-export function SignInForm({ orgSlug, orgName }: { orgSlug: string; orgName: string }) {
+export function SignInForm({ orgSlug }: { orgSlug: string; orgName?: string }) {
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -37,11 +37,10 @@ export function SignInForm({ orgSlug, orgName }: { orgSlug: string; orgName: str
 
   return (
     <form onSubmit={submit} className="space-y-4" noValidate>
-      <p className="text-small text-muted">{orgName}</p>
       <label className="block">
         <span className="text-small font-semibold">{t.login}</span>
         <input
-          className="mt-1 block w-full min-h-tap rounded-xl2 border border-hairline-firm bg-surface px-3 text-body focus:outline-none focus:border-brand"
+          className="field-input mt-1"
           name="login" autoComplete="username" autoCapitalize="none" spellCheck={false} required
           value={login} onChange={(e) => setLogin(e.target.value)}
         />
@@ -49,7 +48,7 @@ export function SignInForm({ orgSlug, orgName }: { orgSlug: string; orgName: str
       <label className="block">
         <span className="text-small font-semibold">{t.password}</span>
         <input
-          className="mt-1 block w-full min-h-tap rounded-xl2 border border-hairline-firm bg-surface px-3 text-body focus:outline-none focus:border-brand"
+          className="field-input mt-1"
           name="password" type="password" autoComplete="current-password" required
           value={password} onChange={(e) => setPassword(e.target.value)}
         />
@@ -57,7 +56,7 @@ export function SignInForm({ orgSlug, orgName }: { orgSlug: string; orgName: str
       {error && <p role="alert" className="rounded-xl2 bg-bad-wash px-3 py-2 text-small text-bad-ink">{error}</p>}
       <button
         type="submit" disabled={busy || !login || !password}
-        className="w-full min-h-tap-lg rounded-xl2 bg-brand px-4 font-semibold text-white shadow-brutal-sm hover:bg-brand-hover disabled:bg-faint-line"
+        className="btn-brutal-blue w-full justify-center"
       >
         {busy ? t.working : t.submit}
       </button>

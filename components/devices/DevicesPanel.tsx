@@ -5,7 +5,7 @@ import { en } from '@/lib/i18n/en';
 import { ReauthDialog } from '@/components/auth/ReauthDialog';
 
 const t = en.devices;
-const field = 'mt-1 block w-full min-h-tap rounded-xl2 border border-hairline-firm bg-surface px-3 text-body focus:outline-none focus:border-brand';
+const field = 'field-input mt-1';
 type Device = { id: string; name: string; premisesName: string; lastSeenAt: string | null; revokedAt: string | null; thisDevice: boolean };
 
 /** M-10 / M-11: list, trust this PC (signed with a `devices.register` grant), revoke. */
@@ -73,7 +73,7 @@ export function DevicesPanel({ orgId, premises, onDevice }: { orgId: string; pre
             </select>
           </label>
           <button type="submit" disabled={!name.trim() || !premisesId}
-            className="w-full min-h-tap-lg rounded-xl2 bg-brand px-4 font-semibold text-white shadow-brutal-sm hover:bg-brand-hover disabled:bg-faint-line">
+            className="btn-brutal-blue w-full justify-center">
             {t.trustThis}
           </button>
         </form>

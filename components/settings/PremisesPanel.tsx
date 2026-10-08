@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import Button from '@/components/ui/Button';
+import { IconPlus } from '@/components/ui/icons';
 import DataList from '@/components/ui/DataList';
 import Sheet from '@/components/ui/Sheet';
 import StatusPill from '@/components/ui/StatusPill';
@@ -42,13 +43,15 @@ export function PremisesPanel({ orgId, canEdit }: { orgId: string; canEdit: bool
 
   return (
     <div className="space-y-4">
-      {canEdit && <Button variant="brutal" onClick={() => open('new')}>{t.addPremises}</Button>}
+      {canEdit && <Button variant="brutal-blue" onClick={() => open('new')}><IconPlus className="h-4 w-4" /> {t.addPremises}</Button>}
+      <div className="card overflow-hidden">
       <DataList rows={rows} rowKey={(p) => p.id} empty={t.none} onRowClick={canEdit ? open : undefined} columns={[
         { key: 'name', header: t.name, cell: (p) => p.name, primary: true },
         { key: 'state', header: t.stateCode, cell: (p) => p.stateCode },
         { key: 'gstin', header: t.gstin, cell: (p) => p.gstin ?? '—', phoneHidden: true },
         { key: 'active', header: t.active, cell: (p) => <StatusPill status={p.active ? 'active' : 'inactive'} /> },
       ]} />
+      </div>
       <Sheet open={editing !== null} onOpenChange={(o) => !o && setEditing(null)} title={editing === 'new' ? t.addPremises : t.edit}>
         <form onSubmit={save} className="space-y-4" noValidate>
           <TextField label={t.name} value={form.name} maxLength={80} onChange={(e) => setForm({ ...form, name: e.target.value })} />

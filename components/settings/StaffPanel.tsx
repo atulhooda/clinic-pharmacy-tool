@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import Button from '@/components/ui/Button';
+import { IconPlus } from '@/components/ui/icons';
 import DataList from '@/components/ui/DataList';
 import Sheet from '@/components/ui/Sheet';
 import StatusPill from '@/components/ui/StatusPill';
@@ -69,13 +70,15 @@ export function StaffPanel({ orgId, isOwner, premises }: { orgId: string; isOwne
 
   return (
     <div className="space-y-4">
-      <Button variant="brutal" onClick={() => open('new')}>{t.addStaff}</Button>
+      <Button variant="brutal-blue" onClick={() => open('new')}><IconPlus className="h-4 w-4" /> {t.addStaff}</Button>
+      <div className="card overflow-hidden">
       <DataList rows={rows} rowKey={(s) => s.id} empty={t.none} onRowClick={open} columns={[
         { key: 'name', header: t.name, cell: (s) => s.name, primary: true },
         { key: 'login', header: t.login, cell: (s) => <span className="font-mono">{s.login}</span> },
         { key: 'role', header: t.role, cell: (s) => s.role },
         { key: 'active', header: t.active, cell: (s) => <StatusPill status={s.active ? 'active' : 'inactive'} /> },
       ]} />
+      </div>
       <Sheet open={editing !== null} onOpenChange={(o) => { if (!o) { setEditing(null); setOtp(null); } }} title={editing === 'new' ? t.addStaff : t.edit}>
         {otp ? (
           <div className="space-y-3">

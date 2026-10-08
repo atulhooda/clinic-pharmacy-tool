@@ -1,11 +1,12 @@
 /* Copied with the UI kit from Ritu Desk's app/globals.css (desk origin/main @ 8bee594, 2026-10-08);
-   owned by this repo. Web-font variables replaced by the system stack (no build-time font download). */
+   owned by this repo. The fonts come from next/font (app/layout.tsx). */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 html {
   font-size: 16px;
+  color-scheme: light; /* a light-only design */
 }
 body {
   background-color: #f5f3ee; /* warm paper canvas */

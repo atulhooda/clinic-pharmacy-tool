@@ -3,7 +3,8 @@ import type { Config } from "tailwindcss";
 // The palette is a copy of Ritu Desk's design tokens (desk origin/main @ 8bee594, copied with
 // the UI kit in PR 4; 06a §1.2, §16). This repo owns the copy. THE PALETTE IS OVERRIDDEN, NOT
 // EXTENDED: only these tokens compile, and `npm run check:classes` fails on any other colour
-// or size class. Left out: the desk's product-named and appointment/SLA tokens.
+// or size class. Left out: the desk's product-named and appointment/SLA tokens. Fonts: the desk's,
+// through next/font (app/layout.tsx), self-hosted at build.
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"],
   theme: {
@@ -39,10 +40,9 @@ const config: Config = {
     },
     extend: {
       fontFamily: {
-        // The system stack: no build-time font download (the desk loads web fonts).
-        sans: ["system-ui", "-apple-system", "Segoe UI", "Noto Sans Gujarati", "Noto Sans Devanagari", "sans-serif"],
-        serif: ["Georgia", "serif"],
-        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+        sans: ["var(--font-inter)", "system-ui", "-apple-system", "Segoe UI", "Noto Sans Gujarati", "Noto Sans Devanagari", "sans-serif"],
+        serif: ["var(--font-fraunces)", "Georgia", "serif"], // italic accents
+        mono: ["var(--font-mono)", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"], // micro-labels
         indic: ["Noto Sans Gujarati", "Noto Sans Devanagari", "system-ui", "sans-serif"],
       },
       fontSize: {

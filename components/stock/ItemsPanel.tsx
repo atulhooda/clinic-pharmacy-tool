@@ -6,6 +6,9 @@ import Badge from '@/components/ui/Badge';
 import DataList from '@/components/ui/DataList';
 import Sheet from '@/components/ui/Sheet';
 import { TextField, SelectField } from '@/components/ui/Field';
+import FilterPills from '@/components/ui/FilterPills';
+import SearchField from '@/components/ui/SearchField';
+import { IconPlus } from '@/components/ui/icons';
 import { en } from '@/lib/i18n/en';
 import { api } from '@/components/settings/client';
 
@@ -21,6 +24,7 @@ const FLAGS = ['H', 'H1', 'X', 'G', 'NDPS', 'H2'];
 /** E-08 … E-17: the catalogue. Items come from the medicine list or are custom; pack units have fixed factors. */
 export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
   const [q, setQ] = useState('');
+  const [cat, setCat] = useState<'ALL' | string>('ALL');
   const [items, setItems] = useState<Item[]>([]);
   const [adding, setAdding] = useState(false);
   const [mq, setMq] = useState('');
@@ -47,7 +51,7 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
     const r = await api<Item>('/api/dispensary/items', { body: draft });
     if (!r.ok) return setError(r.body.error ?? en.settings.failed);
     setAdding(false);
-    await load(q);
+    await load('');
     setOpen(r.body);
   }
   async function patch(body: Record<string, unknown>) {
@@ -56,7 +60,7 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
     const r = await api<Item>(`/api/dispensary/items/${open.id}`, { method: 'PATCH', body });
     if (!r.ok) return setError(r.body.error ?? en.settings.failed);
     setOpen(r.body);
-    await load(q);
+    await load('');
   }
   async function addUnit(e: FormEvent) {
     e.preventDefault();
@@ -73,19 +77,33 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
     await reopen(open.id);
   }
 
+  const needle = q.trim().toLowerCase();
+  const shown = items.filter((i) => (cat === 'ALL' || i.category === cat) && (!needle || i.displayName.toLowerCase().includes(needle)));
+  const label = (c: string) => ({ MEDICINE: 'Medicine', RETAIL_PRODUCT: 'Retail', INJECTABLE: 'Injectable', CONSUMABLE: 'Consumable' } as Record<string, string>)[c] ?? c;
   return (
     <div className="space-y-4">
-      <form onSubmit={(e) => { e.preventDefault(); void load(q); }} className="flex items-end gap-2">
-        <TextField label={t.search} value={q} onChange={(e) => setQ(e.target.value)} className="flex-1" />
-        <Button type="submit">→</Button>
-        {canEdit && <Button variant="brutal" onClick={() => { setError(null); setAdding(true); setMasters([]); }}>{t.addItem}</Button>}
-      </form>
-      <DataList rows={items} rowKey={(i) => i.id} empty={en.settings.none} onRowClick={(i) => reopen(i.id)} columns={[
-        { key: 'name', header: t.displayName, cell: (i) => i.displayName, primary: true },
-        { key: 'cat', header: t.category, cell: (i) => i.category },
-        { key: 'flags', header: t.scheduleFlags, cell: (i) => (
-          <span className="flex gap-1">{i.scheduleFlags.map((f) => <Badge key={f} tone="neutral">{f}</Badge>)}{i.requiresPrescription && <Badge tone="bad">Rx</Badge>}</span>) },
-      ]} />
+      <div className="flex flex-wrap items-center gap-3">
+        <SearchField value={q} onChange={setQ} placeholder="Search items by name…" className="w-full md:w-80" />
+        <FilterPills value={cat} onChange={setCat} options={[
+          { key: 'ALL', label: 'All', count: items.length },
+          ...CATEGORIES.map((c) => ({ key: c, label: label(c), count: items.filter((i) => i.category === c).length })),
+        ]} />
+        {canEdit && (
+          <Button variant="brutal-blue" className="md:ml-auto" onClick={() => { setError(null); setAdding(true); setMasters([]); }}>
+            <IconPlus className="h-4 w-4" /> {t.addItem}
+          </Button>
+        )}
+      </div>
+      <div className="card overflow-hidden">
+        <DataList rows={shown} rowKey={(i) => i.id} empty={items.length ? 'No item matches.' : 'No items yet. Add the first one.'} onRowClick={(i) => reopen(i.id)} columns={[
+          { key: 'name', header: 'Item', primary: true, cell: (i) => (
+            <span><span className="block font-semibold text-ink">{i.displayName}</span><span className="block text-micro text-muted">{label(i.category)} · {i.baseUnit.toLowerCase()}</span></span>) },
+          { key: 'flags', header: t.scheduleFlags, cell: (i) => (
+            <span className="flex flex-wrap gap-1">{i.scheduleFlags.length ? i.scheduleFlags.map((f) => <Badge key={f} tone="warn">{f}</Badge>) : <span className="text-faint">—</span>}</span>) },
+          { key: 'rx', header: 'Prescription', cell: (i) => (i.requiresPrescription ? <Badge tone="bad">● Required</Badge> : <span className="text-faint">—</span>) },
+          { key: 'reorder', header: 'Reorder at', align: 'right', phoneHidden: true, cell: (i) => <span className="tnum">{i.reorderLevel ?? '—'}</span> },
+        ]} />
+      </div>
       <Sheet open={adding} onOpenChange={setAdding} title={t.addItem} wide>
         <div className="space-y-4">
           <form onSubmit={searchMaster} className="flex items-end gap-2">

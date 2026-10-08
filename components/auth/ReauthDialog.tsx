@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { en } from '@/lib/i18n/en';
 
 const t = en.reauth;
-const field = 'mt-1 block w-full min-h-tap rounded-xl2 border border-hairline-firm bg-surface px-3 text-body focus:outline-none focus:border-brand';
+const field = 'field-input mt-1';
 
 /**
  * Asks for the signing PIN (or the password) and returns a single-use grant (A-12, 06a §3.7).
@@ -52,7 +52,7 @@ export function ReauthDialog({ purpose, entityId, onGrant, onCancel }: {
         <div className="flex gap-3">
           <button type="button" onClick={onCancel} className="min-h-tap rounded-xl2 px-4 text-small font-semibold text-muted">{t.cancel}</button>
           <button type="submit" disabled={busy || !secret}
-            className="flex-1 min-h-tap-lg rounded-xl2 bg-brand px-4 font-semibold text-white shadow-brutal-sm hover:bg-brand-hover disabled:bg-faint-line">
+            className="btn-brutal-blue flex-1 justify-center">
             {t.submit}
           </button>
         </div>

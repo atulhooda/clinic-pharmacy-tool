@@ -66,7 +66,7 @@ export function LockScreen() {
           {screen.people.map((p) => (
             <li key={p.sessionId}>
               <button type="button" onClick={() => { setPicked(p); setError(null); }}
-                className="w-full min-h-tap-lg rounded-xl2 border border-hairline-firm px-4 text-left hover:border-brand">
+                className="flex w-full min-h-tap-lg items-center justify-between rounded-xl2 border border-hairline-firm bg-surface px-4 text-left transition-shadow hover:border-ink hover:shadow-brutal-sm">
                 <span className="font-semibold">{p.name}</span> <span className="text-small text-muted">({p.role})</span>
               </button>
             </li>
@@ -83,14 +83,14 @@ export function LockScreen() {
             <span className="text-small font-semibold">{t.enterPin}</span>
             <input autoFocus inputMode="numeric" autoComplete="off" maxLength={6} type="password" value={pin}
               onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
-              className="mt-1 block w-full min-h-tap rounded-xl2 border border-hairline-firm bg-surface px-3 text-body tracking-widest focus:outline-none focus:border-brand" />
+              className="field-input mt-1 tracking-widest" />
           </label>
           {error && <p role="alert" className="rounded-xl2 bg-bad-wash px-3 py-2 text-small text-bad-ink">{error}</p>}
           <div className="flex gap-3">
             <button type="button" onClick={() => { setPicked(null); setPin(''); setError(null); }}
               className="min-h-tap rounded-xl2 px-4 text-small font-semibold text-muted">{t.back}</button>
             <button type="submit" disabled={busy || pin.length !== 6}
-              className="flex-1 min-h-tap-lg rounded-xl2 bg-brand px-4 font-semibold text-white shadow-brutal-sm hover:bg-brand-hover disabled:bg-faint-line">
+              className="btn-brutal-blue flex-1 justify-center">
               {t.submit}
             </button>
           </div>

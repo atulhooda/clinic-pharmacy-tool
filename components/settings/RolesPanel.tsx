@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import Button from '@/components/ui/Button';
+import { IconPlus } from '@/components/ui/icons';
 import Badge from '@/components/ui/Badge';
 import Sheet from '@/components/ui/Sheet';
 import { TextField } from '@/components/ui/Field';
@@ -49,8 +50,8 @@ export function RolesPanel({ orgId, catalogue }: { orgId: string; catalogue: { k
 
   return (
     <div className="space-y-4">
-      <Button variant="brutal" onClick={() => open('new')}>{t.addRole}</Button>
-      <ul className="divide-y divide-hairline rounded-xl2 border border-hairline bg-surface">
+      <Button variant="brutal-blue" onClick={() => open('new')}><IconPlus className="h-4 w-4" /> {t.addRole}</Button>
+      <ul className="card divide-y divide-hairline overflow-hidden">
         {roles.map((r) => (
           <li key={r.key}>
             <button type="button" onClick={() => open(r)} className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-surface-raise/50">

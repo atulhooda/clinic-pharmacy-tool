@@ -33,12 +33,14 @@ export function AuditPanel() {
         <TextField label={t.filterAction} value={action} onChange={(e) => setAction(e.target.value)} className="flex-1" />
         <Button type="submit">→</Button>
       </form>
+      <div className="card overflow-hidden">
       <DataList rows={rows} rowKey={(r) => r.id} empty={t.none} columns={[
         { key: 'at', header: t.when, cell: (r) => <span className="tnum">{ist(r.at)}</span>, primary: true },
         { key: 'who', header: t.who, cell: (r) => `${r.actorLabel} (${r.actorRole})` },
         { key: 'what', header: t.what, cell: (r) => <span className="font-mono">{r.action}</span> },
         { key: 'detail', header: t.details, cell: (r) => <span className="font-mono text-micro">{JSON.stringify(r.detail)}</span>, phoneHidden: true },
       ]} />
+      </div>
       {next && <Button onClick={() => load(next, action.trim())}>{t.more}</Button>}
     </div>
   );

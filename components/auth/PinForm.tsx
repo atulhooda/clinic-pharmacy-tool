@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { en } from '@/lib/i18n/en';
 
 const t = en.pins;
-const field = 'mt-1 block w-full min-h-tap rounded-xl2 border border-hairline-firm bg-surface px-3 text-body focus:outline-none focus:border-brand';
+const field = 'field-input mt-1';
 
 /** A-14 (switch PIN) and A-15 (signing PIN, with the password in the same request). */
 export function PinForm({ kind }: { kind: 'switch' | 'signing' }) {
@@ -59,7 +59,7 @@ export function PinForm({ kind }: { kind: 'switch' | 'signing' }) {
       <p className="text-micro text-muted">{t.rules}</p>
       {error && <p role="alert" className="rounded-xl2 bg-bad-wash px-3 py-2 text-small text-bad-ink">{error}</p>}
       <button type="submit" disabled={busy || pin.length !== 6 || (kind === 'signing' && !password)}
-        className="w-full min-h-tap-lg rounded-xl2 bg-brand px-4 font-semibold text-white shadow-brutal-sm hover:bg-brand-hover disabled:bg-faint-line">
+        className="btn-brutal-blue w-full justify-center">
         {t.submit}
       </button>
     </form>

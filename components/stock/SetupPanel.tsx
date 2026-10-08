@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import Button from '@/components/ui/Button';
 import { TextField, SelectField } from '@/components/ui/Field';
+import Badge from '@/components/ui/Badge';
+import MonoLabel from '@/components/ui/MonoLabel';
+import Sheet from '@/components/ui/Sheet';
 import { en } from '@/lib/i18n/en';
 import { api } from '@/components/settings/client';
 import { useGrant } from '@/components/settings/useGrant';
@@ -48,51 +51,61 @@ export function SetupPanel({ canEdit }: { canEdit: boolean }) {
   }
 
   if (configured === null) return null;
+  const openPremises = premises.find((p) => p.id === open);
   return (
-    <div className="space-y-6">
-      {!configured && (
-        <div className="space-y-3">
-          <p className="text-body">{t.notConfigured}</p>
-          {canEdit && <Button variant="brutal" onClick={setUp}>{t.setUpDispensary}</Button>}
+    <div className="space-y-4">
+      <section className="card flex flex-wrap items-center justify-between gap-4 p-5">
+        <div>
+          <MonoLabel dot={configured ? 'green' : 'amber'}>Dispensary</MonoLabel>
+          <p className="mt-2 text-h3">{configured ? 'Set up' : t.notConfigured}</p>
+          <p className="text-small text-muted">{configured ? 'Near-expiry windows, the reversal window and the entry lags use their defaults; they can be tuned later.' : 'One step for the organisation, then one per premises.'}</p>
         </div>
-      )}
+        {!configured && canEdit && <Button variant="brutal-blue" onClick={setUp}>{t.setUpDispensary}</Button>}
+      </section>
+
       {configured && (
-        <ul className="divide-y divide-hairline rounded-xl2 border border-hairline">
-          {premises.map((p) => (
-            <li key={p.id} className="space-y-2 px-4 py-3">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold">{p.name}</span>
-                {p.settings ? <span className="text-small text-ok-ink">{t.configured} · {p.settings.dispensingMode}</span>
-                  : canEdit && <Button size="sm" onClick={() => { setError(null); setOpen(p.id); }}>{t.premisesSetup}</Button>}
-              </div>
-              {p.locations.length > 0 && <p className="text-micro text-muted">{t.locations}: {p.locations.map((l) => l.name).join(', ')}</p>}
-              {open === p.id && (
-                <form onSubmit={save} className="space-y-3 pt-2" noValidate>
-                  <SelectField label={t.mode} value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
-                    {Object.entries(t.modes).map(([k, v]) => <option key={k} value={k} disabled={k !== 'RMP_OWN_PATIENTS'}>{v}</option>)}
-                  </SelectField>
-                  <TextField label={t.ndpsLicence} value={form.ndps} onChange={(e) => setForm({ ...form, ndps: e.target.value })} />
-                  <TextField label={t.validTill} type="date" value={form.ndpsTill} onChange={(e) => setForm({ ...form, ndpsTill: e.target.value })} />
-                  <TextField label={t.scheduleXLicence} value={form.x} onChange={(e) => setForm({ ...form, x: e.target.value })} />
-                  <TextField label={t.validTill} type="date" value={form.xTill} onChange={(e) => setForm({ ...form, xTill: e.target.value })} />
-                  <fieldset className="space-y-1">
-                    <legend className="text-small font-medium text-ink-soft">{t.h1Fields}</legend>
-                    {H1.map((f) => (
-                      <label key={f} className="flex items-center gap-2 text-small">
-                        <input type="checkbox" checked={form.h1.includes(f)}
-                          onChange={(e) => setForm({ ...form, h1: e.target.checked ? [...form.h1, f] : form.h1.filter((x) => x !== f) })} /> {f}
-                      </label>
-                    ))}
-                  </fieldset>
-                  <TextField label={t.rxMaxAge} inputMode="numeric" value={form.age} onChange={(e) => setForm({ ...form, age: e.target.value.replace(/\D/g, '') })} />
-                  <Button type="submit" variant="brutal">{en.settings.save}</Button>
-                </form>
-              )}
-            </li>
-          ))}
-        </ul>
+        <section className="card overflow-hidden">
+          <div className="border-b border-hairline px-5 py-4"><MonoLabel>Premises</MonoLabel></div>
+          <ul className="divide-y divide-hairline">
+            {premises.map((p) => (
+              <li key={p.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+                <div className="min-w-0">
+                  <p className="font-semibold">{p.name}</p>
+                  <p className="text-micro text-muted">{p.locations.length ? `${t.locations}: ${p.locations.map((l) => l.name).join(', ')}` : 'no locations yet'}</p>
+                </div>
+                {p.settings ? <Badge tone="ok">● {p.settings.dispensingMode.replace(/_/g, ' ').toLowerCase()}</Badge>
+                  : canEdit ? <Button size="sm" variant="brutal" onClick={() => { setError(null); setOpen(p.id); }}>{t.premisesSetup}</Button>
+                  : <Badge tone="warn">not set up</Badge>}
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
-      {error && <p role="alert" className="text-small text-bad">{error}</p>}
+      {error && !open && <p role="alert" className="text-small text-bad">{error}</p>}
+
+      <Sheet open={open !== null} onOpenChange={(o) => !o && setOpen(null)} title={openPremises ? `${t.premisesSetup}: ${openPremises.name}` : t.premisesSetup}>
+        <form onSubmit={save} className="space-y-3" noValidate>
+          <SelectField label={t.mode} value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
+            {Object.entries(t.modes).map(([k, v]) => <option key={k} value={k} disabled={k !== 'RMP_OWN_PATIENTS'}>{v}</option>)}
+          </SelectField>
+          <TextField label={t.ndpsLicence} value={form.ndps} onChange={(e) => setForm({ ...form, ndps: e.target.value })} />
+          <TextField label={t.validTill} type="date" value={form.ndpsTill} onChange={(e) => setForm({ ...form, ndpsTill: e.target.value })} />
+          <TextField label={t.scheduleXLicence} value={form.x} onChange={(e) => setForm({ ...form, x: e.target.value })} />
+          <TextField label={t.validTill} type="date" value={form.xTill} onChange={(e) => setForm({ ...form, xTill: e.target.value })} />
+          <fieldset className="space-y-1">
+            <legend className="text-small font-medium text-ink-soft">{t.h1Fields}</legend>
+            {H1.map((f) => (
+              <label key={f} className="flex items-center gap-2 text-small">
+                <input type="checkbox" checked={form.h1.includes(f)}
+                  onChange={(e) => setForm({ ...form, h1: e.target.checked ? [...form.h1, f] : form.h1.filter((x) => x !== f) })} /> {f.replace(/_/g, ' ').toLowerCase()}
+              </label>
+            ))}
+          </fieldset>
+          <TextField label={t.rxMaxAge} inputMode="numeric" value={form.age} onChange={(e) => setForm({ ...form, age: e.target.value.replace(/\D/g, '') })} />
+          {error && <p role="alert" className="text-small text-bad">{error}</p>}
+          <Button type="submit" variant="brutal-blue">{en.settings.save}</Button>
+        </form>
+      </Sheet>
       {dialog}
     </div>
   );

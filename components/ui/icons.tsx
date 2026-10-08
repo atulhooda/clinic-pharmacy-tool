@@ -107,6 +107,19 @@ export const IconSearch = ({ className }: P) => (
   <svg {...base(className)}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
 );
 
+export const IconBox = ({ className }: P) => (
+  <svg {...base(className)}><path d="M21 8 12 3 3 8v8l9 5 9-5V8Z" /><path d="m3 8 9 5 9-5M12 13v8" /></svg>
+);
+export const IconTruck = ({ className }: P) => (
+  <svg {...base(className)}><path d="M3 6h11v10H3zM14 9h4l3 3v4h-7" /><circle cx="7" cy="17.5" r="1.5" /><circle cx="17" cy="17.5" r="1.5" /></svg>
+);
+export const IconSliders = ({ className }: P) => (
+  <svg {...base(className)}><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="18" cy="18" r="2" /></svg>
+);
+export const IconUser = ({ className }: P) => (
+  <svg {...base(className)}><circle cx="12" cy="8" r="4" /><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" /></svg>
+);
+
 export const NAV_ICONS = {
   patients: IconPatients,
   insights: IconInsights,

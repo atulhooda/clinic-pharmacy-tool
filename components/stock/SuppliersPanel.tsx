@@ -6,6 +6,9 @@ import Badge from '@/components/ui/Badge';
 import DataList from '@/components/ui/DataList';
 import Sheet from '@/components/ui/Sheet';
 import { TextField } from '@/components/ui/Field';
+import FilterPills from '@/components/ui/FilterPills';
+import SearchField from '@/components/ui/SearchField';
+import { IconPlus } from '@/components/ui/icons';
 import { en } from '@/lib/i18n/en';
 import { api } from '@/components/settings/client';
 
@@ -18,6 +21,8 @@ const TONE: Record<string, 'ok' | 'bad' | 'neutral'> = { VALID: 'ok', EXPIRED: '
 /** E-20 / E-21: suppliers and their licence status (derived as of today, IST). */
 export function SuppliersPanel({ canEdit }: { canEdit: boolean }) {
   const [rows, setRows] = useState<Supplier[]>([]);
+  const [q, setQ] = useState('');
+  const [status, setStatus] = useState<string>('ALL');
   const [editing, setEditing] = useState<Supplier | 'new' | null>(null);
   const [form, setForm] = useState(blank);
   const [error, setError] = useState<string | null>(null);
@@ -44,14 +49,28 @@ export function SuppliersPanel({ canEdit }: { canEdit: boolean }) {
   const field = (k: keyof typeof blank, label: string, extra: Record<string, unknown> = {}) =>
     <TextField label={label} value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} {...extra} />;
 
+  const needle = q.trim().toLowerCase();
+  const shown = rows.filter((s) => (status === 'ALL' || s.licenceStatus === status) && (!needle || s.name.toLowerCase().includes(needle)));
+  const LABEL: Record<string, string> = { VALID: 'Valid', EXPIRED: 'Expired', MISSING: 'No licence', VALIDITY_UNKNOWN: 'No expiry date' };
   return (
     <div className="space-y-4">
-      {canEdit && <Button variant="brutal" onClick={() => open('new')}>{t.addSupplier}</Button>}
-      <DataList rows={rows} rowKey={(s) => s.id} empty={en.settings.none} onRowClick={canEdit ? open : undefined} columns={[
-        { key: 'name', header: t.displayName, cell: (s) => s.name, primary: true },
-        { key: 'gstin', header: t.gstin, cell: (s) => s.gstin ?? '—', phoneHidden: true },
-        { key: 'lic', header: t.licenceStatus, cell: (s) => <Badge tone={TONE[s.licenceStatus] ?? 'neutral'}>{s.licenceStatus}</Badge> },
-      ]} />
+      <div className="flex flex-wrap items-center gap-3">
+        <SearchField value={q} onChange={setQ} placeholder="Search suppliers…" className="w-full md:w-80" />
+        <FilterPills value={status} onChange={setStatus} options={[
+          { key: 'ALL', label: 'All', count: rows.length },
+          ...['VALID', 'EXPIRED', 'MISSING', 'VALIDITY_UNKNOWN'].map((k) => ({ key: k, label: LABEL[k], count: rows.filter((r) => r.licenceStatus === k).length })),
+        ]} />
+        {canEdit && <Button variant="brutal-blue" className="md:ml-auto" onClick={() => open('new')}><IconPlus className="h-4 w-4" /> {t.addSupplier}</Button>}
+      </div>
+      <div className="card overflow-hidden">
+        <DataList rows={shown} rowKey={(s) => s.id} empty={rows.length ? 'No supplier matches.' : 'No suppliers yet.'} onRowClick={canEdit ? open : undefined} columns={[
+          { key: 'name', header: 'Supplier', primary: true, cell: (s) => (
+            <span><span className="block font-semibold text-ink">{s.name}</span><span className="block text-micro text-muted">{s.drugLicenceNumbers.join(' · ') || 'no licence number'}</span></span>) },
+          { key: 'gstin', header: t.gstin, phoneHidden: true, cell: (s) => <span className="font-mono text-small">{s.gstin ?? '—'}</span> },
+          { key: 'lic', header: t.licenceStatus, cell: (s) => <Badge tone={TONE[s.licenceStatus] ?? 'neutral'}>● {LABEL[s.licenceStatus] ?? s.licenceStatus}</Badge> },
+          { key: 'till', header: 'Valid till', align: 'right', phoneHidden: true, cell: (s) => <span className="tnum">{s.licenceValidTill ?? '—'}</span> },
+        ]} />
+      </div>
       <Sheet open={editing !== null} onOpenChange={(o) => !o && setEditing(null)} title={editing === 'new' ? t.addSupplier : en.settings.edit}>
         <form onSubmit={save} className="space-y-3" noValidate>
           {field('name', t.displayName, { maxLength: 120 })}

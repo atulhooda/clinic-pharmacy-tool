@@ -2,6 +2,8 @@ import { notFound } from 'next/navigation';
 import { resolveOrgBySlug } from '@/lib/db/orgs';
 import { getSchemaStatus } from '@/lib/db/selfcheck';
 import { SignInForm } from '@/components/auth/SignInForm';
+import Brand from '@/components/ui/Brand';
+import MonoLabel from '@/components/ui/MonoLabel';
 import { en } from '@/lib/i18n/en';
 
 export const dynamic = 'force-dynamic';
@@ -15,7 +17,8 @@ export default async function SignInPage({ params }: { params: { org: string } }
   if (!org) notFound();
   return (
     <Shell>
-      <h1 className="text-h1 mb-6">{en.signIn.title}</h1>
+      <MonoLabel dot="blue">{org.displayName}</MonoLabel>
+      <h1 className="mb-6 mt-2 text-h1">{en.signIn.title}<span className="accent-serif">.</span></h1>
       <SignInForm orgSlug={org.slug} orgName={org.displayName} />
     </Shell>
   );
@@ -23,9 +26,10 @@ export default async function SignInPage({ params }: { params: { org: string } }
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-4">
-      <p className="mb-2 text-micro font-semibold uppercase tracking-widest text-muted">{en.appName}</p>
-      <div className="rounded-xl2 border border-hairline bg-surface p-6 shadow-card">{children}</div>
+    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4">
+      <Brand />
+      <div className="card mt-6 p-6 md:p-8">{children}</div>
+      <p className="mt-6 text-center"><MonoLabel dot="blue">Powered by Engageo</MonoLabel></p>
     </main>
   );
 }
