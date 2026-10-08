@@ -1,11 +1,16 @@
 # Spec 06a — Clinic Pharmacy Tool: Design
 
-**Status:** **Rev 6 (standalone)**, 2026-10-08. **Milestone 1 is being built** (§19); everything else stays design.
+**Status:** **Rev 6.1 (standalone)**, 2026-10-08. **Milestone 1 is being built** (§19); everything else stays design.
 **Written against:** clinic-pharmacy-tool `origin/main` @ `6f5ffb2` (fetched 2026-10-08; README only). Stack conventions from Ritu Desk `origin/main` @ `8bee594` (fetched 2026-10-08; no newer commits).
 **History:** Revisions 4–6 were squashed into one commit when this repo's history was cleaned on 2026-10-08; the revision notes say what each changed. Earlier drafts, from when this was planned as a Ritu Desk module, are kept privately. Rev 4 replaced those drafts (D-24).
 
 **Type:** design spec (architecture, identity, data model, invariants, operations, API)
 **Index, decisions, open questions:** [06](06-dispensary-ledger.md) · **Acceptance gate:** [06b](06b-dispensary-ledger.acceptance.md)
+
+**Rev 6.1 changes (founder round 7, D-42 … D-44):**
+- Stock-count corrections, including found stock, are Milestone 1; the dispensing PR is split in two (§19: PR 9 dispensing, PR 10 returns, write-offs, count corrections, reversals). Milestone 1 is now 13 PRs.
+- One-row-per-thing tables (settings, device state) get an `id` and a `UNIQUE` on their natural key, so every tenant table keeps the `(org_id, id)` primary key (§2.6 rule 1).
+- A-02 names the organisation by slug in its body (§12.3).
 
 **Rev 6 changes (founder round 6, D-38 … D-41):**
 - **Milestone 1** is defined (06 §5); §18 renumbers the migrations in build order; §19 is the Milestone 1 PR plan.
@@ -242,7 +247,7 @@ If any check fails, every `/api/*` route except `GET /api/health` returns **503 
 
 **Rules.** The migration tests (06b DS-18 … 21, DMG-05/06/14) check every one, from the catalog.
 
-1. **Primary keys.** Every tenant table's primary key is **`(org_id, id)`**. No tenant table has a single-column key on `id`. (Rev 4 had `id` as the key, plus `UNIQUE (org_id, id)`.)
+1. **Primary keys.** Every tenant table's primary key is **`(org_id, id)`**. No tenant table has a single-column key on `id`. A table with one row per organisation, premises or device still has an `id`; a `UNIQUE` on (`org_id`[, natural key]) keeps it to one row. (Rev 4 had `id` as the key, plus `UNIQUE (org_id, id)`.)
 2. **Foreign keys.** Every FK from one tenant table to another is composite and starts with `org_id`: `FOREIGN KEY (org_id, x_id) REFERENCES x (org_id, id)`. This includes every actor and `*_by` column (→ `staff_users`), `otp_challenges` and `reauth_grants`.
 3. **Branch stock.** Every row that names a batch or a stock location carries **`premises_id`**, and its FKs include it:
 
@@ -658,7 +663,7 @@ Everything is **Phase 1** unless marked. **P1-C** means Phase 1 *conditional* on
 | `legal_name` | TEXT NULL | |
 | `active` | BOOLEAN NOT NULL DEFAULT true | |
 
-**`org_settings`**: one row per organisation (PK `org_id`); security and session settings.
+**`org_settings`**: one row per organisation (PK (`org_id`, `id`); UNIQUE (`org_id`)); security and session settings.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -717,7 +722,7 @@ Everything is **Phase 1** unless marked. **P1-C** means Phase 1 *conditional* on
 | `secret_failures` | INTEGER NOT NULL DEFAULT 0 | §3.7 |
 | `revoked_at`, `revoked_reason` | | `revoked_reason` CHECK in (`sign_out`, `sign_out_all`, `replaced`, `expired`, `idle`, `wrong_secrets`, `deactivated`, `role_changed`, `password_changed`, `password_reset`, `device_revoked`, `owner_revoked`) |
 
-**`device_state`**: one row per device (PK (`org_id`, `device_id`)): `active_session_id` (composite FK → `sessions`, NULL = locked), `updated_at`. It is kept separate from `devices` so that devices and sessions do not reference each other.
+**`device_state`**: one row per device (PK (`org_id`, `id`); UNIQUE (`org_id`, `device_id`)): `active_session_id` (composite FK → `sessions`, NULL = locked), `updated_at`. It is kept separate from `devices` so that devices and sessions do not reference each other.
 
 **`otp_challenges`**
 
@@ -891,7 +896,7 @@ Index: trigram GIN on `lower(brand_name)` (`pg_trgm`), for import matching and s
 
 ### 6.4 Configuration
 
-**`stock_settings`**: one row per organisation (PK `org_id`).
+**`stock_settings`**: one row per organisation (PK (`org_id`, `id`); UNIQUE (`org_id`)).
 
 | Column | Type | Notes |
 |---|---|---|
@@ -906,7 +911,7 @@ Index: trigram GIN on `lower(brand_name)` (`pg_trgm`), for import matching and s
 | `intra_state_transfers_enabled` | BOOLEAN NOT NULL DEFAULT false | Phase 2, D-19. Turned on per organisation only after the clinic's CA signs off. |
 | `version`, `updated_by`, `updated_at` | | optimistic concurrency via `If-Match` |
 
-**`premises_settings`**: one row per premises (PK (`org_id`, `premises_id`)). **The legal configuration lives here (D-6).**
+**`premises_settings`**: one row per premises (PK (`org_id`, `id`); UNIQUE (`org_id`, `premises_id`)). **The legal configuration lives here (D-6).**
 
 | Column | Type | Notes |
 |---|---|---|
@@ -1657,7 +1662,7 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | # | Method and path | Access | Notes |
 |---|---|---|---|
 | A-01 | `GET /api/auth/context` | public | The sign-in context: the organisation (from the device cookie, the `pharm_org` cookie or `?org=<slug>`), its display name, and whether this browser is a trusted device (and its premises). Returns no ids. Unknown slug → 404 `ORG_NOT_FOUND`. |
-| A-02 | `POST /api/auth/sign-in` | public | `{login, password}` |
+| A-02 | `POST /api/auth/sign-in` | public | `{orgSlug, login, password}`. The slug only chooses where to look up the login; the password decides. On a trusted device (PR 3) the device cookie's organisation wins. |
 | A-03 | `POST /api/auth/otp/start` | public | `{phone}` → 202 `{challengeId, channel}` for every well-formed number |
 | A-04 | `POST /api/auth/otp/verify` | public | `{challengeId, code}` → session |
 | A-05 | `POST /api/auth/otp/{challengeId}/sms` | public | the SMS fallback, from 30 s after start (409 `TOO_EARLY` before) |
@@ -2017,10 +2022,10 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | 023 | `idempotency_keys` | 7 |
 | 024 | `goods_receipts` (+ lines; posted-immutability trigger) | 8 |
 | 025 | `dispenses` (+ lines, allocations, the L-25 trigger); includes the nullable `LICENSED_PHARMACY` and backdate columns (R6-9) | 9 |
-| 026 | `patient_returns` (+ lines) | 9 |
-| 027 | `stock_adjustments` (+ lines; `opened_container_id` nullable, its FK added in Milestone 2) | 9 |
-| 028 | `stock_reversals` | 9 |
-| 029 | `stock_imports`, `stock_import_rows` | 11 |
+| 026 | `patient_returns` (+ lines) | 10 |
+| 027 | `stock_adjustments` (+ lines: write-offs, stock-count corrections incl. found stock; `opened_container_id` nullable, its FK added in Milestone 2) | 10 |
+| 028 | `stock_reversals` | 10 |
+| 029 | `stock_imports`, `stock_import_rows` | 12 |
 
 **Milestone 2, numbered when built:** `otp_challenges`, `item_tax_rates`, `procedure_types`, `patient_merges` (+ the `patient_canonical` view), `opened_containers` (+ the FK on `stock_adjustment_lines`), `procedure_uses`, `supplier_returns`, `outbox_events`, `ledger_reconciliation_runs`, `master_correction_requests` (+ the `curation_*` policies).
 
@@ -2050,10 +2055,11 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | **6** | **People:** patients, prescribers, prescriptions (manual and photo) (P-01 … P-13) | 018–020 | DRX-01 … 16; DX-20 … 31 |
 | **7** | **Ledger:** batches, movements, balances, triggers, idempotency | 021–023 | DL (M1 rows), DP-01 … 08, 10, 12; DA; DK-01 … 03 |
 | **8** | **Receiving stock** (E-23 … E-26) | 024 | DO-01 … 04; DM-04 … 06; DX-46 … 49 |
-| **9** | **Dispensing:** FEFO, the M1 mode rules, `requires_prescription`, patient returns, write-offs, reversals (E-27 … E-30, E-32, E-34, E-35) | 025–028 | DE, DU (except DU-17), DK, DM (M1 rules), DO (M1 rows), DC (M1 rows); DX-50 … 58, 60, 62, 63 |
-| **10** | **Views and registers:** stock overview, low stock, near expiry; the H1 and purchase registers, print and CSV (E-38 … E-40) | — | DR (M1 rows); DX-65 … 68 |
-| **11** | **CSV import of opening stock** (E-41 … E-44) | 029 | DIM (CSV rows); DX-69 … 72 |
-| **12** | **Pilot readiness:** the stock screens finished; an end-to-end "day at one premises" test; a demo seed script | — | the Milestone 1 gate (06b §30) |
+| **9** | **Dispensing:** allocation (FEFO), preview and dispense, the M1 mode rules, `requires_prescription` (E-27 … E-30) | 025 | DE (dispensing rows), DU (except DU-17), DK, DM (M1 rules), DO (dispense rows), DC-01 … 04, 10, 11; DX-50 … 58 |
+| **10** | **Returns and corrections:** patient returns, write-offs, **stock-count corrections incl. found stock** (D-42), reversals (E-32, E-34, E-35) | 026–028 | DE-10 … 16, 20; DO (return, reversal and adjustment rows); DC-05 … 07; DPN-13; DX-60, 62, 63 |
+| **11** | **Views and registers:** stock overview, low stock, near expiry; the H1 and purchase registers, print and CSV (E-38 … E-40) | — | DR (M1 rows); DX-65 … 68 |
+| **12** | **CSV import of opening stock** (E-41 … E-44) | 029 | DIM (CSV rows); DX-69 … 72 |
+| **13** | **Pilot readiness:** the stock screens finished; an end-to-end "day at one premises" test; a demo seed script | — | the Milestone 1 gate (06b §30) |
 
 Each PR follows the same order: migrations → queries/service → tests → routes → UI.
 
