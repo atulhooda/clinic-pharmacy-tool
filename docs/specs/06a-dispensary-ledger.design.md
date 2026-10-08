@@ -41,6 +41,15 @@
   - `rebuild_balances()` is a SQL function only the migrator may run, inside a tenant transaction (§7.4);
   - the property tests of PR 7 run over the ledger's own operations; DP-08 needs returns (PR 10) and DP-12 prescriptions (PR 9). DL-19's API half comes with PR 8, the first route that posts movements (§19).
 
+- **Reading supplier bills (D-51):** a photo or PDF of a supplier's bill pre-fills a draft delivery through a vision model; principle 7 (§0) gains its one exception; E-51; PR 8b (§12.2, §12.3, §16, §19).
+- Clarified while building PR 8:
+  - a draft's lines are a JSON array on the header until posting (the app role holds no DELETE, so line rows could not be removed); posting writes the immutable line rows and empties it. `received_at` and `posted_at` are set at posting, NULL in a draft (§6.7);
+  - the app role holds UPDATE on `stock_balances.updated_at` alone, because `SELECT … FOR UPDATE` needs a column privilege; `on_hand` stays unwritable (§7.3, §9.1);
+  - E-24 shows a draft's posting checks (errors and warnings) before posting; the first error decides the status, and every error is in `details.problems` (§9.3);
+  - E-45 serves its own print view (`format=print`, HTML) and CSV; the Stock page's statement is a screen over E-45 (§14);
+  - Add an item lists every medicine in one dropdown: the organisation's own items first (picking one opens it, so nothing is added twice), then the master (§16);
+  - DO-04's second half (an invoice posts again after a reversal) waits for reversals (PR 10).
+
 **Rev 6.1 changes (founder round 7, D-42 … D-44):**
 - Stock-count corrections, including found stock, are Milestone 1; the dispensing PR is split in two (§19: PR 9 dispensing, PR 10 returns, write-offs, count corrections, reversals). Milestone 1 is now 13 PRs.
 - One-row-per-thing tables (settings, device state) get an `id` and a `UNIQUE` on their natural key, so every tenant table keeps the `(org_id, id)` primary key (§2.6 rule 1).
@@ -119,6 +128,7 @@
 7. **No model in the loop.**
    - No LLM output feeds stock state, allocation, pricing, compliance, registers or prescription records.
    - A prescription photo is evidence for a human. Its lines are typed by staff; there is no OCR and no extraction.
+   - **The one exception (D-51): a supplier's bill may be read by a model to pre-fill a draft delivery.** A person checks and matches every line; nothing is posted, created or changed by the model, and posting runs the same rules as a typed draft.
 8. **No clinical decision support:** no dose calculation, no interaction checking, no automatic substitution.
 9. **Configuration over code.** Differences between organisations and premises are rows: no `if org_id == …`, and no drug names in code.
 10. **Standalone (D-24, D-29).** Nothing here depends on Ritu Desk, its voice server or Ritu Desk's Spec 07. Ideas borrowed from them are restated in full.
@@ -1793,7 +1803,7 @@ A change applies to bills issued after it; issued bills keep their snapshots.
 - **Required:** an `Idempotency-Key` header (8–128 characters, `[A-Za-z0-9_-]`) on every POST/PUT/PATCH. Missing → 400 `IDEMPOTENCY_KEY_REQUIRED`.
 - **Exempt:**
   - `/api/auth/*` and `/api/account/*`, which have their own replay rules: a sign-in or a PIN is never replayed;
-  - the read-only POSTs `dispenses/preview` and `imports/{id}/validate`.
+  - the read-only POSTs `dispenses/preview`, `imports/{id}/validate` and `goods-receipts/read-bill` (E-51, D-51).
 - **Scope:** (`org_id`, key). `request_sha256` is the hash of method + path + canonical body. For a multipart upload, the body is the file's SHA-256 plus the form fields.
 - **Mechanism:** the key row is inserted **first, inside the business transaction.** Postgres makes a concurrent insert of the same key wait on the uncommitted unique entry.
   - If the first request commits, the second **replays**: the original status, the resource re-read from the DB, and the header `Idempotent-Replayed: true`. No new rows are written.
@@ -1918,6 +1928,7 @@ A change applies to bills issued after it; issued bills keep their snapshots.
 | E-48 | `GET /dispensary/bills/{id}?format=&layout=` | `dispense.view` | `format` = `json` (default) or `print`; `layout` = `a5` (default) or `roll80` |
 | E-49 | `GET /dispensary/credit-notes/{id}?format=&layout=` | `dispense.view` | as E-48 |
 | E-50 | `GET /dispensary/reports/sales-register?premisesId=&from=&to=&format=` | `stock.reports` | D-49, §14. **`premisesId` required**; `format` = `json`, `csv` or `print`; 422 `PERIOD_TOO_LONG` (> 366 days). It holds no patient data, so it needs no signing grant; an export is audited (`report.exported`). |
+| E-51 | `POST /dispensary/goods-receipts/read-bill` (multipart: `file`) | `stock.receive` | D-51. A JPEG, PNG, WebP or PDF of one supplier bill, ≤ 8 MB (413 `FILE_TOO_LARGE`; 422 `UNSUPPORTED_FORMAT`). Returns what was read and the proposed matches (R8-11); **writes nothing**. 503 `BILL_READER_NOT_CONFIGURED` without a key; 502 `BILL_READ_FAILED` when nothing usable comes back. |
 
 `GET /api/health` is public and returns only `{ok, schemaVerified}`.
 
@@ -2097,7 +2108,7 @@ A change applies to bills issued after it; issued bills keep their snapshots.
 | Premises picker | In the header. Defaults to the trusted device's premises. Sets the default premises for every action. Registers are always per premises; reports default to the whole organisation. |
 | Stock overview | Search by name or salt. On-hand per premises (base units + packs). Badges `LOW`, `NEAR EXPIRY (≤ N d)`, `EXPIRED STOCK`, `DISCARD PENDING` (P1-C). |
 | Item detail | Units; batches (expiry, on-hand per location, MRP); the full ledger history (type, qty, batch, actor, time in IST, document link). Read-only: no edit affordance exists. **No patient names.** |
-| Receive stock (GRN) | A supplier picker with a licence-status chip; line entry with expiry as `MM/YYYY`; save a draft; post after reviewing the warnings. |
+| Receive stock (GRN) | A supplier picker with a licence-status chip; line entry with expiry as `MM/YYYY`, the item picked from a dropdown of every item; save a draft, which shows what posting would say; post after reviewing the warnings.<br>• **Read a bill photo (D-51):** take or choose a photo or PDF; its lines come back pre-filled beside an item picker with the best matches; nothing is kept until a person creates the draft. |
 | Dispense | **Opened only from a patient or a prescription record**, never free-floating at an RMP premises.<br>• **From a prescription:** each transcribed line (medicine as written, quantity as written, remaining prescribed quantity for MR-18 items) sits beside a stock-item picker and the photo. A line's matched item is pre-selected; nothing is auto-dispensed, and lines not dispensed stay visibly undispensed.<br>• **On every line:** the dispensable on-hand at this premises; the FEFO suggestion with an optional batch override; an MRP ceiling hint; salt-based alternatives as information only (choosing one needs a substitution reason).<br>• **Backdating:** a "handed over earlier" toggle reveals `occurredAt`. A reason is asked only beyond the organisation's reason-free lag, and the toggle is absent for H1/X/NDPS lines.<br>• **Preview, then confirm.** The client generates the idempotency key once per confirm dialog, so a double click reuses it.<br>• **Where the premises bills (D-49):** prices are pre-filled with the MRP ceiling; the preview shows the bill's totals and GST; after confirming, **Print bill** opens the print view (A5 or 80 mm roll, remembered per browser). |
 | Procedure use | From a patient, with an optional procedure type. For a multi-dose item (P1-C), shows the open container's remaining units and a countdown to `discardAfter`. A lapsed container blocks use and offers one-click "Discard remaining N units". Under the `DOCTOR_OVERRIDE` policy, a prescriber-linked user sees "Use anyway", which needs a reason and the signing PIN. |
 | Returns & write-offs | A patient return starts from a dispense (allocations, returnable qty, disposition). Supplier return. Write-off with a mandatory reason. Reversal with a mandatory reason, showing what will be undone. Each of the last three asks for the signing PIN. |
@@ -2213,7 +2224,7 @@ A change applies to bills issued after it; issued bills keep their snapshots.
 
 **Branches:** each PR is a branch based on the previous one (`m1/pr-01-foundation`, `m1/pr-02-…`). The spec branch is its base.
 
-**Build order (D-50):** 1–5, then 7, 8, 6, 9, 10, then 11–15. "The previous one" is the PR built just before; PR 7's base is PR 5.
+**Build order (D-50, D-51):** 1–5, then 7, 8, 8b, 6, 9, 10, then 11–15. "The previous one" is the PR built just before; PR 7's base is PR 5.
 
 | PR | Contents | Migrations | Gate (06b) |
 |---|---|---|---|
@@ -2225,6 +2236,7 @@ A change applies to bills issued after it; issued bills keep their snapshots.
 | **6** | **People:** patients, prescribers, prescriptions (manual and photo) (P-01 … P-13) | 023–025 | DRX-01 … 16; DX-20 … 31 |
 | **7** | **Ledger:** batches, movements, balances, triggers, idempotency (also on the administration writes, 06 R7-2); the catalogue's ledger reads: E-18, E-14's batches and balances, E-12's stock filters (so the Stock page shows each item's **balance**, D-47); `items_freeze` | 019–021 | DL (M1 rows), DP-01 … 07, 10 (DP-08 with PR 10, DP-12 with PR 9); DA; DK-01 … 07, 09, 11; DX-43 |
 | **8** | **Receiving stock** (E-23 … E-26); **the stock statement (E-45, D-47), moved here by D-50,** with print and CSV | 022 | DO-01 … 04; DM-04 … 06; DX-46 … 49; DR-17 … 20 for the movements that exist by then (receipts, opening balances), completed as PRs 9 and 10 add theirs; DX-81 |
+| **8b** | **Reading supplier bills (D-51):** E-51, the matching, the review screen | — | DBR-01 … 08; DX-87 |
 | **9** | **Dispensing:** allocation (FEFO), preview and dispense, the M1 mode rules, `requires_prescription` (E-27 … E-30) | 026 | DE (dispensing rows), DU (except DU-17), DK, DM (M1 rules), DO (dispense rows), DC-01 … 04, 10, 11; DX-50 … 58 |
 | **10** | **Returns and corrections:** patient returns, write-offs, **stock-count corrections incl. found stock** (D-42), reversals (E-32, E-34, E-35) | 027–029 | DE-10 … 16, 20; DO (return, reversal and adjustment rows); DC-05 … 07; DPN-13; DX-60, 62, 63 |
 | **11** | **Billing (D-49):** GST rates per HSN (E-19); the billing settings on premises (E-06); a bill on every dispense where the premises bills, cancelled with its reversal; credit notes with patient returns; the print views and the bill list (E-47 … E-49); the sales register (E-50) | 030–031 | DU-17; DBL-01 … 16; DX-83 … 86 |
