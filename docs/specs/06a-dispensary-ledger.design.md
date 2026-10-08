@@ -33,6 +33,14 @@
   - the UI kit copy also brings the desk's shell (sidebar, top bar, page heads) and its fonts through `next/font` (06 R7-4, revised 2026-10-08);
   - the master seed: `data/master/` with `SOURCES.md`; `scripts/load-master.cjs` upserts by (`source`, `source_ref`), a reviewed unique key on the global table; every row is loaded unverified and without schedule flags until the curator confirms them (06 OQ-5, R7-6).
 
+- Clarified while building PR 7:
+  - the cache trigger updates the balance row first and inserts only for a new key. `INSERT … ON CONFLICT DO UPDATE` cannot be used: Postgres checks CHECK constraints on the proposed insert row before it resolves the conflict, so a draw on an existing key would fail `on_hand >= 0` (§7.3);
+  - `stock_movements_validate` leaves an item, batch or movement the tenant cannot see to the composite FKs (23503), and also sends expired opening stock to quarantine (D-14, hint `OPENING_EXPIRED_NOT_QUARANTINED`); a CHECK pairs each movement type with the document lines it may name (§7.1, §7.3);
+  - each write route declares its success status and how a replay re-reads its resource; a replay never shows a one-time password or a device token again (§12.2);
+  - E-12 carries each item's balance over the caller's premises (or `premisesId`): on hand, dispensable, quarantined, expired, earliest expiry, low stock, near expiry. E-18 pages by (`occurred_at`, `id`), never `seq` (§12.3);
+  - `rebuild_balances()` is a SQL function only the migrator may run, inside a tenant transaction (§7.4);
+  - the property tests of PR 7 run over the ledger's own operations; DP-08 needs returns (PR 10) and DP-12 prescriptions (PR 9). DL-19's API half comes with PR 8, the first route that posts movements (§19).
+
 **Rev 6.1 changes (founder round 7, D-42 … D-44):**
 - Stock-count corrections, including found stock, are Milestone 1; the dispensing PR is split in two (§19: PR 9 dispensing, PR 10 returns, write-offs, count corrections, reversals). Milestone 1 is now 13 PRs.
 - One-row-per-thing tables (settings, device state) get an `id` and a `UNIQUE` on their natural key, so every tenant table keeps the `(org_id, id)` primary key (§2.6 rule 1).
@@ -1435,16 +1443,22 @@ END $$;
 CREATE TRIGGER stock_movements_validate BEFORE INSERT ON stock_movements
   FOR EACH ROW EXECUTE FUNCTION stock_movements_validate();
 
--- L-2, L-3: the cache, maintained in the same transaction
+-- L-2, L-3: the cache, maintained in the same transaction. Update first; insert only for a new key
+-- (an ON CONFLICT DO UPDATE would check on_hand >= 0 on the proposed insert row first). The loser of
+-- a race to create a key loops back to the update.
 CREATE FUNCTION stock_movements_apply() RETURNS trigger LANGUAGE plpgsql
 SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
-  INSERT INTO stock_balances (org_id, premises_id, item_id, batch_id, location_id, on_hand, last_movement_seq)
-  VALUES (NEW.org_id, NEW.premises_id, NEW.item_id, NEW.batch_id, NEW.location_id, NEW.qty_delta, NEW.seq)
-  ON CONFLICT (org_id, premises_id, item_id, batch_id, location_id) DO UPDATE
-    SET on_hand = stock_balances.on_hand + EXCLUDED.on_hand,
-        last_movement_seq = EXCLUDED.last_movement_seq, updated_at = now();
-  RETURN NULL;   -- CHECK (on_hand >= 0) fires here if anything slipped through
+  LOOP
+    UPDATE stock_balances SET on_hand = on_hand + NEW.qty_delta, last_movement_seq = NEW.seq, updated_at = now()
+     WHERE org_id = NEW.org_id AND premises_id = NEW.premises_id AND item_id = NEW.item_id
+       AND location_id = NEW.location_id AND batch_id IS NOT DISTINCT FROM NEW.batch_id;
+    IF FOUND THEN RETURN NULL; END IF;   -- CHECK (on_hand >= 0) fires here if anything slipped through
+    INSERT INTO stock_balances (org_id, premises_id, item_id, batch_id, location_id, on_hand, last_movement_seq)
+    VALUES (NEW.org_id, NEW.premises_id, NEW.item_id, NEW.batch_id, NEW.location_id, NEW.qty_delta, NEW.seq)
+    ON CONFLICT (org_id, premises_id, item_id, batch_id, location_id) DO NOTHING;
+    IF FOUND THEN RETURN NULL; END IF;
+  END LOOP;
 END $$;
 CREATE TRIGGER stock_movements_apply AFTER INSERT ON stock_movements
   FOR EACH ROW EXECUTE FUNCTION stock_movements_apply();
@@ -2209,7 +2223,7 @@ A change applies to bills issued after it; issued bills keep their snapshots.
 | **4** | **Administration:** premises, staff, roles, the audit view (M-01 … M-09, M-12) and their screens; the UI kit copied in (the devices endpoints are built in PR 3) | — | DI (administration rows), DX-09 … 17, DX-19 |
 | **5** | **Catalogue and settings:** the minimal master, stock and premises settings, locations, items and units, suppliers (E-01 … E-09, E-12 … E-18, E-20, E-21) | 013–018 | DG-01 … 03, 05 … 07, 09 … 11 (DG-08 and the dispense halves of DG-05 and DG-09 with PR 9); DX-33 … 37, 39 … 42, 45 |
 | **6** | **People:** patients, prescribers, prescriptions (manual and photo) (P-01 … P-13) | 023–025 | DRX-01 … 16; DX-20 … 31 |
-| **7** | **Ledger:** batches, movements, balances, triggers, idempotency (also on the administration writes, 06 R7-2); the catalogue's ledger reads: E-18, E-14's batches and balances, E-12's stock filters (so the Stock page shows each item's **balance**, D-47); `items_freeze` | 019–021 | DL (M1 rows), DP-01 … 08, 10, 12; DA; DK-01 … 03; DX-43 |
+| **7** | **Ledger:** batches, movements, balances, triggers, idempotency (also on the administration writes, 06 R7-2); the catalogue's ledger reads: E-18, E-14's batches and balances, E-12's stock filters (so the Stock page shows each item's **balance**, D-47); `items_freeze` | 019–021 | DL (M1 rows), DP-01 … 07, 10 (DP-08 with PR 10, DP-12 with PR 9); DA; DK-01 … 07, 09, 11; DX-43 |
 | **8** | **Receiving stock** (E-23 … E-26); **the stock statement (E-45, D-47), moved here by D-50,** with print and CSV | 022 | DO-01 … 04; DM-04 … 06; DX-46 … 49; DR-17 … 20 for the movements that exist by then (receipts, opening balances), completed as PRs 9 and 10 add theirs; DX-81 |
 | **9** | **Dispensing:** allocation (FEFO), preview and dispense, the M1 mode rules, `requires_prescription` (E-27 … E-30) | 026 | DE (dispensing rows), DU (except DU-17), DK, DM (M1 rules), DO (dispense rows), DC-01 … 04, 10, 11; DX-50 … 58 |
 | **10** | **Returns and corrections:** patient returns, write-offs, **stock-count corrections incl. found stock** (D-42), reversals (E-32, E-34, E-35) | 027–029 | DE-10 … 16, 20; DO (return, reversal and adjustment rows); DC-05 … 07; DPN-13; DX-60, 62, 63 |
