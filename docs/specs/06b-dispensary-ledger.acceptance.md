@@ -22,6 +22,7 @@ The workflow is strict TDD, as Spec 01 prescribes:
 | DQ | phone OTP |
 | DRX | patients, prescribers and prescriptions |
 | DAU | the audit log |
+| DBR | reading supplier bills (D-51) |
 | DBL | bills, credit notes and GST (D-49) |
 
 ---
@@ -257,6 +258,7 @@ DX-76 fails the build if any route lacks a row here.
 | DX-84 | E-48 a bill | B's bill, as JSON and as the print view | 404 `BILL_NOT_FOUND`, identical to `NONEXIST`, in both formats |
 | DX-85 | E-49 a credit note | B's credit note | 404 `CREDIT_NOTE_NOT_FOUND`, identical to `NONEXIST` |
 | DX-86 | E-50 the sales register | B_GJ | 404 `PREMISES_NOT_FOUND`, identical to `NONEXIST` |
+| DX-87 | E-51 reading a bill | a bill naming B's supplier (B's GSTIN) and B's item names | no candidate is ever one of B's suppliers or items; the response names none of them |
 | **Stock** | | | |
 | DX-33 | E-01 / E-02 / E-03 settings | — | reads and writes A's only; E-02 on a configured A → 409 `ALREADY_CONFIGURED`; B's row unchanged |
 | DX-34 | E-04 `GET /dispensary/premises` | — | A_GJ and A_MH only |
@@ -853,6 +855,21 @@ TOX: base `UNIT`, vial = 100, `in_use_hours` = 24 (test data). The clock is 2026
 
 ---
 
+### 24.2 Reading supplier bills (DBR, D-51)
+
+The reader is replaced by a fixed fake in these rows (no network): it returns a set transcription.
+
+| ID | Scenario | Expected |
+|---|---|---|
+| DBR-01 | E-51 without `ANTHROPIC_API_KEY` | 503 `BILL_READER_NOT_CONFIGURED`; nothing written |
+| DBR-02 | A1 (`doctor`, no `stock.receive`) calls E-51 | 403 `forbidden` |
+| DBR-03 | a 9 MB file; a text file; no `file` field | 413 `FILE_TOO_LARGE`; 422 `UNSUPPORTED_FORMAT`; 422 `FIELD_INVALID` |
+| DBR-04 | the supplier: GSTIN printed with a name unlike the one on file; no GSTIN but the name; neither known | matched by GSTIN; matched by name; no match |
+| DBR-05 | the lines: `ACME SHINE TAB` against an item "Acme Shine Tab"; a name close to no item; a name only loosely like one; pack `10 TAB` where the item has a strip of 10; MRP `117.43`; expiry `11/27` | the item preselected with up to three candidates; none for the unknown name; the loose one offered as a candidate but not preselected; the strip chosen; `mrpPaise = 11743` exactly; the expiry kept as printed (2027-11-30) |
+| DBR-06 | a transcription with a wrong type (qty `"ten"`, MRP `"abc"`); then one with no lines at all | each bad field null and flagged, the rest kept; then 502 `BILL_READ_FAILED` |
+| DBR-07 | any E-51 call | no draft, no movement, no audit row; no `Idempotency-Key` needed; the response holds no image data; the one log line holds counts and a duration only |
+| DBR-08 | the request the server builds for the model | the configured model; the image (or PDF) as base64 with its media type; a single forced tool, `record_bill`; no patient data anywhere in it |
+
 ## 25. Events and jobs (DJ)
 
 | ID | Scenario | Expected |
@@ -962,7 +979,7 @@ TOX: base `UNIT`, vial = 100, `in_use_hours` = 24 (test data). The clock is 2026
 - **DI, DN, DW, DAU, DG:** all rows, except DG-04 (master corrections).
 - **DPN:** all rows except DPN-12 (backdating).
 - **DRX-01 … 16.**
-- **DL, DP, DA, DC, DE, DU, DK, DO, DM, DR, DIM, DBL:** all rows, except those that need a Milestone 2 feature:
+- **DL, DP, DA, DC, DE, DU, DK, DO, DM, DR, DIM, DBL, DBR:** all rows, except those that need a Milestone 2 feature:
 
 | Moves to Milestone 2 | Rows |
 |---|---|
