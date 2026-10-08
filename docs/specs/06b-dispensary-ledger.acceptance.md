@@ -1,6 +1,6 @@
 # Spec 06b — Clinic Pharmacy Tool: Acceptance Gate
 
-**Status:** **Rev 6 (standalone)**, 2026-10-08. Self-contained. Revisions 4–6 were squashed when the history was cleaned (2026-10-08). §30 lists which rows gate Milestone 1.
+**Status:** **Rev 6.1 (standalone)**, 2026-10-08. Self-contained. Revisions 4–6 were squashed when the history was cleaned (2026-10-08). §30 lists which rows gate Milestone 1.
 **Written against:** clinic-pharmacy-tool `origin/main` @ `6f5ffb2` (fetched 2026-10-08; README only). Stack conventions from Ritu Desk `origin/main` @ `8bee594` (fetched 2026-10-08).
 **Type:** acceptance spec (a test set, not a behaviour doc), in the style of Spec 01.
 **Defines "done" for:** [06a](06a-dispensary-ledger.design.md) Phase 1 · **Index and decisions:** [06](06-dispensary-ledger.md)
@@ -925,7 +925,7 @@ TOX: base `UNIT`, vial = 100, `in_use_hours` = 24 (test data). The clock is 2026
 |---|---|
 | backdating | DT (all), DP-11, DC-08, DC-09, DM-21, DR-15 |
 | procedure use, `CONSUMABLES_ONLY`, containers | DM-06 … 09, DM-18, DM-22, DO-18 (re-run at A_GJ by dispensing), DV (all), DL-26, DP-09, DJ-10, DR-14 |
-| stock-count adjustments, opening-balance adjustments, supplier returns | DE-13, DE-14, DE-20 (the adjustment part), DO-17, DM-13 (the supplier-return part) |
+| manual opening-balance adjustments, supplier returns (stock-count corrections are Milestone 1, D-42) | DE-14, DO-17, DM-13 (the supplier-return part), DE-20 (the supplier-return part) |
 | the patient merge tool | DRX-17 … 23, DC-12, DX-78 … 80 |
 | jobs, outbox, reconciliation, purges | DJ (all) |
 | tax rates; valuation and consumption reports; XLSX | DU-17, DR-08, DR-09, DIM-07 |

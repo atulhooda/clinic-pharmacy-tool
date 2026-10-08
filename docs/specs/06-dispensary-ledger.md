@@ -1,6 +1,6 @@
 # Spec 06 — Clinic Pharmacy Tool: Index, Decisions, Open Questions
 
-**Status:** **Rev 6 (standalone)**, 2026-10-08, on branch `docs/spec-06-rev4-standalone` of `clinic-pharmacy-tool`. **Milestone 1 is being built** (§5).
+**Status:** **Rev 6.1 (standalone)**, 2026-10-08, on branch `docs/spec-06-rev4-standalone` of `clinic-pharmacy-tool`. **Milestone 1 is being built** (§5).
 **Written against:** clinic-pharmacy-tool `origin/main` @ `6f5ffb2` (fetched 2026-10-08; README only, no code). Stack conventions from Ritu Desk `origin/main` @ `8bee594` (fetched 2026-10-08; no newer commits).
 **History:** Revisions 4–6 were squashed into one commit when this repo's history was cleaned on 2026-10-08; the revision notes say what each changed. Earlier drafts, from when this was planned as a Ritu Desk module, are kept privately.
 
@@ -90,6 +90,14 @@
 | D-40 | **Small PRs.** PR 1 is the foundation:<br>• the scaffold on the Ritu Desk stack;<br>• a migration runner that fails the deploy on any error;<br>• migration 001 with organisations, premises, RLS and the non-superuser app role;<br>• a real-Postgres test harness;<br>• 06b's tenant-isolation and catalog checks in the test run.<br>**Every PR:** written against the spec and a fetched commit; tests for every rule it touches; the full suite green before the next PR starts. **No hosting yet:** everything runs locally. | 06a §19 |
 | D-41 | **The GitHub organisation question is dropped:** push to the existing repo, `atulhooda/clinic-pharmacy-tool`. (The repo-transfer half of D-37 is withdrawn; its own Railway project still applies when hosting comes.) | — |
 
+### Round 7 (founder, 2026-10-08): applied in Rev 6.1
+
+| ID | Decision | Reflected in |
+|---|---|---|
+| D-42 | **Stock-count corrections, including adding found stock, move into Milestone 1.** Supplier returns stay in Milestone 2. Supersedes R6-4. | §5; 06a §19 (PR 10); 06b §30 |
+| D-43 | **Repo hygiene.** Confirm the repo's visibility before every push. Never put client names, patient data, security findings or infrastructure details in this repo; incident notes live only in the private Ritu Desk repo. The history was cleaned on 2026-10-08. | `CLAUDE.md` |
+| D-44 | **Review cadence.** PR 1 is approved; PR 2 is reviewed on its own; after that, three PRs between reviews. | §5 |
+
 ### Engineer's calls in Rev 4 (under D-3; veto any)
 
 | ID | Call | Why | Where |
@@ -114,7 +122,7 @@ After round 5: R4-1 is decided as D-32, R4-2 is widened by D-33, and R4-7 is con
 | R6-1 | **The signing PIN, with its pepper, stays in Milestone 1** | Reversals and write-offs are in Milestone 1, and D-33 makes them signed actions. It needs no third party. |
 | R6-2 | **Milestone 1 supports `RMP_OWN_PATIENTS` only.** `CONSUMABLES_ONLY` waits for procedure use (Milestone 2). | A consumables-only premises has nothing to do without procedure use |
 | R6-3 | **No backdating in Milestone 1.** Every entry is recorded at the time (`occurred_at = recorded_at`), so the H1 30-minute rule holds trivially. Backdating, including a GRN's `received_at`, is Milestone 2. | It is not on the Milestone 1 list. The columns and CHECKs exist from the start, so nothing is retrofitted. |
-| R6-4 | **Stock-count adjustments and supplier returns are Milestone 2.** In Milestone 1, only a write-off can reduce stock outside dispensing, and found stock cannot be added. | Not on the Milestone 1 list. Say so if the pilot needs count corrections from day one: they are small. |
+| R6-4 | ~~Stock-count adjustments and supplier returns are Milestone 2.~~ **Superseded by D-42:** count corrections (including found stock) are Milestone 1; supplier returns stay Milestone 2. | — |
 | R6-5 | **A minimal `medicine_master` in Milestone 1,** seeded only from the reviewed data file with the `requires_prescription` starting values (oral isotretinoin, acitretin) and NLEM generics; loaded by `pharmacy_curator`. Master corrections are Milestone 2. | D-32's starting values need master rows |
 | R6-6 | **The test harness runs real Postgres from the local binaries** (`initdb`/`pg_ctl`), or from `TEST_PG_SUPERUSER_URL` when one is given (CI, Docker) | Docker isn't running on the dev Mac; the tests must run there. The database is still real, with the real roles and migrations. |
 | R6-7 | **Migration 001 is one "tenancy foundation" change:** helpers, `organisations`, `premises`, RLS, the resolver function, the grants. **The roles themselves** come from `ops/bootstrap-roles.sql`, run once by the platform superuser. | That is the founder's PR 1 brief. A non-superuser migrator cannot create roles, by design. |
@@ -256,7 +264,7 @@ After round 5: R4-1 is decided as D-32, R4-2 is widened by D-33, and R4-7 is con
 - **Dispensing:**
   - FEFO; the expiry block; the MRP ceiling;
   - MR-01 … 05, 08 … 11, 13, 14, 18 (`requires_prescription`), 19 … 22;
-  - patient returns; write-offs (expiry, damage); reversals; idempotency.
+  - patient returns; write-offs (expiry, damage); **stock-count corrections**, up or down, including found stock, which may create its batch (D-42); reversals; idempotency.
 - **Views:** stock overview, low stock, near expiry (computed live, no jobs); the H1 and purchase registers (print view and CSV).
 
 **Later (everything else in Rev 5):**
@@ -264,10 +272,10 @@ After round 5: R4-1 is decided as D-32, R4-2 is widened by D-33, and R4-7 is con
 | Milestone | Contents |
 |---|---|
 | **Pilot go-live** (after Milestone 1 is accepted) | Hosting in its own Railway project; DS-12 (no superuser DSN); the restore drill (06b DMG-10); `PIN_PEPPERS` set; the DPA (OQ-24); counsel's review (OQ-8, OQ-32); OQ-1 |
-| **Milestone 2** | • Phone OTP, once the WhatsApp authentication template and the DLT sender header and template are approved.<br>• Backdating, including a GRN's `received_at`, and the entry-lag report.<br>• Stock-count adjustments and manual opening balances; supplier returns.<br>• The patient merge tool.<br>• Procedure use with `CONSUMABLES_ONLY` and procedure types; opened containers (P1-C, if OQ-1 confirms).<br>• GST tax rates.<br>• The outbox, daily and weekly jobs, reconciliation, purges.<br>• Master corrections.<br>• Valuation, consumption and non-moving reports.<br>• XLSX import. |
+| **Milestone 2** | • Phone OTP, once the WhatsApp authentication template and the DLT sender header and template are approved.<br>• Backdating, including a GRN's `received_at`, and the entry-lag report.<br>• Manual opening balances (outside an import); supplier returns.<br>• The patient merge tool.<br>• Procedure use with `CONSUMABLES_ONLY` and procedure types; opened containers (P1-C, if OQ-1 confirms).<br>• GST tax rates.<br>• The outbox, daily and weekly jobs, reconciliation, purges.<br>• Master corrections.<br>• Valuation, consumption and non-moving reports.<br>• XLSX import. |
 | **Milestone 3** | `LICENSED_PHARMACY`; same-state transfers (D-19); stock takes and purchase orders; consumption templates; per-premises reorder levels; a server PDF for registers; WhatsApp refill reminders (after opt-in and opt-out, C-14); object storage at 10 GB (D-35); temperature logging; Ritu Desk integration if OQ-30 says yes |
 
-**How Milestone 1 is built:** 12 small PRs (06a §19). Each is on its own branch, based on the previous one, and each passes the full suite before the next starts. PR 1 stops for review.
+**How Milestone 1 is built:** 13 small PRs (06a §19). Each is on its own branch, based on the previous one, and each passes the full suite before the next starts. Reviews (D-44): PR 1 (approved), PR 2 on its own, then every three PRs.
 
 ### Go-live gates, for the first premises
 
