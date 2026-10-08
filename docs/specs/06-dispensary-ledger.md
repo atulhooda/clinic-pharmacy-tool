@@ -106,6 +106,12 @@
 | D-46 | **The repo is deleted and recreated** (same name, public) so that the commits from before the 2026-10-08 clean-up are no longer served by GitHub. Only the clean branches are pushed to it. | `CLAUDE.md` |
 | — | PR 2 is approved. PRs 3–5 are next, then a review (D-44). | §5 |
 
+### Round 9 (founder, passing on the pilot clinic's request, 2026-10-08): applied in Rev 6.2
+
+| ID | Decision | Reflected in |
+|---|---|---|
+| D-47 | **A stock statement in Milestone 1:** for any period and premises, per item, **opening stock + new supply (received) − issued = balance**, with patient returns and the other movements (write-offs, count corrections, opening entries, reversals) in their own columns so the sum always balances. The clinic's words: "balance is important". The Stock page shows each item's balance as soon as stock moves (PR 7); the full statement, with print and CSV, comes with the other views (PR 11). | §5; 06a §14, §12.3 (E-45), §19; 06b DR-17 … 20, DX-81 |
+
 ### Engineer's calls in Rev 6.2 (under D-3; veto any)
 
 | ID | Call | Why |
@@ -294,7 +300,7 @@ After round 5: R4-1 is decided as D-32, R4-2 is widened by D-33, and R4-7 is con
   - FEFO; the expiry block; the MRP ceiling;
   - MR-01 … 05, 08 … 11, 13, 14, 18 (`requires_prescription`), 19 … 22;
   - patient returns; write-offs (expiry, damage); **stock-count corrections**, up or down, including found stock, which may create its batch (D-42); reversals; idempotency.
-- **Views:** stock overview, low stock, near expiry (computed live, no jobs); the H1 and purchase registers (print view and CSV).
+- **Views:** stock overview, low stock, near expiry (computed live, no jobs); **the stock statement** (opening + received − issued = balance, per item and period, D-47); the H1 and purchase registers (print view and CSV).
 
 **Later (everything else in Rev 5):**
 

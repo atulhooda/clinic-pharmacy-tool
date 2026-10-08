@@ -7,7 +7,8 @@
 **Type:** design spec (architecture, identity, data model, invariants, operations, API)
 **Index, decisions, open questions:** [06](06-dispensary-ledger.md) · **Acceptance gate:** [06b](06b-dispensary-ledger.acceptance.md)
 
-**Rev 6.2 changes (founder review of PR 2, D-45, D-46):**
+**Rev 6.2 changes (founder review of PR 2, D-45 … D-47):**
+- **The stock statement (D-47):** opening + received − issued = balance, per item and period (§14, E-45, §19 PR 11); each item's balance on the Stock page from PR 7.
 - Failed sign-ins are counted **per submitted username**, whether or not the account exists; after 5 failures the answer is 429 `too_many_attempts` for both (§3.3, §3.8). The counter moves to a new table, `sign_in_throttle`, holding only an HMAC of the login (§6.1, R6-10).
 - Migration 012 is `sign_in_throttle` (PR 3); the later migrations move up by one (§18, §19).
 - Clarified while building PR 3:
@@ -1803,6 +1804,7 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | E-41 | `POST /dispensary/imports` (multipart, `locationId`) | `stock.import` | 413 `FILE_TOO_LARGE`; 422 `UNSUPPORTED_FORMAT` |
 | E-42 | `GET /dispensary/imports/{id}`, `GET …/rows` | `stock.import` | the dry-run report |
 | E-43 | `PATCH /dispensary/imports/{id}/rows/{rowId}` | `stock.import` | confirm, custom, skip, fix |
+| E-45 | `GET /dispensary/reports/stock-statement?premisesId=&from=&to=&format=` | `stock.view` | D-47, §14. `premisesId` omitted = the organisation (the caller's premises; the owner: all); `format` = `json` (default), `csv` or `print`; 422 `PERIOD_TOO_LONG` (> 366 days). It holds no patient data, so it needs no signing grant; an export is still audited (`report.exported`). |
 | E-44 | `POST /dispensary/imports/{id}/{validate, commit, abandon}` | `stock.import` (+ grant `stock.import_commit` for commit) | 409 `IMPORT_HAS_ERRORS`, `IMPORT_ALREADY_COMMITTED` |
 
 `GET /api/health` is public and returns only `{ok, schemaVerified}`.
@@ -1889,6 +1891,7 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | **Purchase register** (Schedule K record) | **per premises** (required) | `goods_receipt_lines` of `POSTED`/`REVERSED` GRNs at that premises, with the supplier snapshot | invoice number and date; **received at** and **recorded at**; the supplier's name, address, GSTIN, licence numbers and validity; item; the manufacturer's name **and address**; batch; expiry; qty; free qty; rate; MRP. Reversed GRNs are marked, never removed. |
 | **Entry-lag report** (D-12) | per premises | every backdatable header | The distribution of `recorded_at − occurred_at` by role and document type, and the share needing a reason. This is the pilot data used to tune `backdate_reason_after_minutes`. It is not a register and holds no patient fields. |
 | **Lapsed-container use** (P1-C, D-16) | per premises | `procedure_use_allocations` with `lapse_override_reason` | date, prescriber, item, batch, container, units, minutes past `discard_after`, reason. Empty under `BLOCK`. No patient name: the procedure-use id is a link for `dispense.view` holders. |
+| **Stock statement** (D-47) | **per premises**, or the organisation (the sum of its premises); a period of IST dates `from` … `to` | `stock_movements` by `occurred_at` (IST day), never the cache | Per item, in base units with packs alongside ("3 strips + 5 tab"):<br>• **Opening** = Σ `qty_delta` before the start of `from`;<br>• **Received** = `RECEIPT`;<br>• **Issued** = `DISPENSE` + `PROCEDURE_USE` (shown as a positive number);<br>• **Returned** = `PATIENT_RETURN`;<br>• **Other** (signed) = `OPENING_BALANCE`, `EXPIRY_WRITEOFF`, `DAMAGE_WRITEOFF`, `SUPPLIER_RETURN`, `STOCKTAKE_ADJUSTMENT`;<br>• **Balance** = Opening + Received − Issued + Returned + Other, which equals Σ `qty_delta` up to the end of `to`.<br>A `REVERSAL` counts in the column of the movement it reverses, on its own date (a dispense reversed the next day lowers the next day's Issued). Quarantined stock is in the balance and also shown on its own. Items with no movement in the period and a zero balance are left out unless asked for. No patient field. |
 | Expiry | the organisation, or `premisesId` | balances (`on_hand > 0`) × `batches` | Expired, quarantined, and within each configured window. Grouped by supplier (from receipt lines: a batch bought from two suppliers appears under each, with the qty received) and by manufacturer. |
 | Low stock and reorder suggestion | per premises | balances × `batches` × `items` | dispensable on-hand `< reorder_level`; suggestion = `max(reorder_qty, reorder_level − dispensable_on_hand)` (deterministic; consumption-based suggestions are Phase 2) |
 | Consumption | the organisation, or `premisesId` | `DISPENSE` + `PROCEDURE_USE` movements, net of their reversals and returns | by item, by prescriber, by procedure type or performing prescriber, by IST day/week/month |
@@ -2092,11 +2095,11 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | **4** | **Administration:** premises, staff, roles, the audit view (M-01 … M-09, M-12) and their screens; the UI kit copied in (the devices endpoints are built in PR 3) | — | DI (administration rows), DX-09 … 17, DX-19 |
 | **5** | **Catalogue and settings:** the minimal master, stock and premises settings, locations, items and units, suppliers (E-01 … E-09, E-12 … E-18, E-20, E-21) | 013–018 | DG-01 … 03, 05 … 07, 09 … 11 (DG-08 and the dispense halves of DG-05 and DG-09 with PR 9); DX-33 … 37, 39 … 42, 45 |
 | **6** | **People:** patients, prescribers, prescriptions (manual and photo) (P-01 … P-13) | 019–021 | DRX-01 … 16; DX-20 … 31 |
-| **7** | **Ledger:** batches, movements, balances, triggers, idempotency (also on the administration writes, 06 R7-2); the catalogue's ledger reads: E-18, E-14's batches and balances, E-12's stock filters; `items_freeze` | 022–024 | DL (M1 rows), DP-01 … 08, 10, 12; DA; DK-01 … 03; DX-43 |
+| **7** | **Ledger:** batches, movements, balances, triggers, idempotency (also on the administration writes, 06 R7-2); the catalogue's ledger reads: E-18, E-14's batches and balances, E-12's stock filters (so the Stock page shows each item's **balance**, D-47); `items_freeze` | 022–024 | DL (M1 rows), DP-01 … 08, 10, 12; DA; DK-01 … 03; DX-43 |
 | **8** | **Receiving stock** (E-23 … E-26) | 025 | DO-01 … 04; DM-04 … 06; DX-46 … 49 |
 | **9** | **Dispensing:** allocation (FEFO), preview and dispense, the M1 mode rules, `requires_prescription` (E-27 … E-30) | 026 | DE (dispensing rows), DU (except DU-17), DK, DM (M1 rules), DO (dispense rows), DC-01 … 04, 10, 11; DX-50 … 58 |
 | **10** | **Returns and corrections:** patient returns, write-offs, **stock-count corrections incl. found stock** (D-42), reversals (E-32, E-34, E-35) | 027–029 | DE-10 … 16, 20; DO (return, reversal and adjustment rows); DC-05 … 07; DPN-13; DX-60, 62, 63 |
-| **11** | **Views and registers:** stock overview, low stock, near expiry; the H1 and purchase registers, print and CSV (E-38 … E-40) | — | DR (M1 rows); DX-65 … 68 |
+| **11** | **Views and registers:** stock overview, low stock, near expiry; **the stock statement (E-45, D-47)**; the H1 and purchase registers, print and CSV (E-38 … E-40) | — | DR (M1 rows, DR-17 … 20 included); DX-65 … 68, DX-81 |
 | **12** | **CSV import of opening stock** (E-41 … E-44) | 030 | DIM (CSV rows); DX-69 … 72 |
 | **13** | **Pilot readiness:** the stock screens finished; an end-to-end "day at one premises" test; a demo seed script | — | the Milestone 1 gate (06b §30) |
 
