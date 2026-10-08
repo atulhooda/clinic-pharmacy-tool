@@ -22,6 +22,7 @@ The workflow is strict TDD, as Spec 01 prescribes:
 | DQ | phone OTP |
 | DRX | patients, prescribers and prescriptions |
 | DAU | the audit log |
+| DBL | bills, credit notes and GST (D-49) |
 
 ---
 
@@ -252,6 +253,10 @@ DX-76 fails the build if any route lacks a row here.
 | DX-80 | P-17 undo | B's merge | 404 `MERGE_NOT_FOUND`; B's merge still in force |
 | DX-81 | E-45 the stock statement | B_GJ; and with no `premisesId` | 404 `PREMISES_NOT_FOUND`, identical to `NONEXIST`; the organisation-wide statement has none of B's items or movements |
 | DX-82 | E-46 Insights | B_GJ; and with no `premisesId` | 404 `PREMISES_NOT_FOUND`, identical to `NONEXIST`; the organisation-wide numbers include none of B's dispenses, receipts or stock |
+| DX-83 | E-47 bills | B_GJ; and with no `premisesId` | 404 `PREMISES_NOT_FOUND`, identical to `NONEXIST`; the organisation-wide list has none of B's bills or credit notes |
+| DX-84 | E-48 a bill | B's bill, as JSON and as the print view | 404 `BILL_NOT_FOUND`, identical to `NONEXIST`, in both formats |
+| DX-85 | E-49 a credit note | B's credit note | 404 `CREDIT_NOTE_NOT_FOUND`, identical to `NONEXIST` |
+| DX-86 | E-50 the sales register | B_GJ | 404 `PREMISES_NOT_FOUND`, identical to `NONEXIST` |
 | **Stock** | | | |
 | DX-33 | E-01 / E-02 / E-03 settings | — | reads and writes A's only; E-02 on a configured A → 409 `ALREADY_CONFIGURED`; B's row unchanged |
 | DX-34 | E-04 `GET /dispensary/premises` | — | A_GJ and A_MH only |
@@ -820,6 +825,32 @@ TOX: base `UNIT`, vial = 100, `in_use_hours` = 24 (test data). The clock is 2026
 | DR-23 | top items, sales by day and by prescriber, stock health and value for the same month | the ten top items by units and by value with packs; one bar per IST day; by-prescriber totals add up to the sales totals; the health counts equal the low-stock, expiry and non-moving reports; the values equal DR-09 |
 | DR-24 | Insights with no `premisesId`, as the owner and as AF; and a scan of every Insights response | the owner's numbers equal A_GJ + A_MH; AF's are A_GJ's alone; no field holds a patient id, name or phone, or prescription text; every `*Paise` field is a safe integer |
 
+### 24.1 Bills, credit notes and GST (DBL, D-49)
+
+**Billing fixtures** (these rows only; every other row runs with billing off, so DU-14's unpriced line still passes):
+- A_GJ: `billing_mode = TAX_INVOICE`, legal name "Org A Health LLP", prefix `AG`, round-off on, phone +91 98000 00090. B_GJ does not bill.
+- Org A's GST rates (test data, not regulatory truth): HSN `30049099` at 500 bp and HSN `33049990` at 1800 bp, both from 2025-09-22, open-ended. PCM, AZI, ISO and ACI have HSN `30049099`; SUN has `33049990`; GLV has none.
+- MRPs as in §2: PCM ₹45.00 per strip of 15 (a per-tablet ceiling of 300), SUN ₹650 per tube.
+
+| ID | Scenario | Expected |
+|---|---|---|
+| DBL-01 | E-06 sets A_GJ's billing: without a grant; with the `premises.legal_settings` grant | 401 `reauth_required`; then 200, one `premises_settings_history` row, audited |
+| DBL-02 | settings that break a rule: billing at A_MH (`CONSUMABLES_ONLY`); `TAX_INVOICE` at a premises without a GSTIN; a mode without a prefix; prefix `ag1` or `ABCDE`; A_MH taking `AG` after A_GJ has issued under it; removing A_GJ's GSTIN through M-04 | 422 `BILLING_NOT_ALLOWED`; 422 `GSTIN_REQUIRED`; 422 `BILLING_DETAILS_REQUIRED`; 422 (format); 409 `PREFIX_TAKEN`; 409 `GSTIN_IN_USE` |
+| DBL-03 | AF dispenses 7 PCM tablets at 300 and 1 tube of SUN at 65000 to P_SUNITA (DOC_A1) | 201 with `bill.number = "AG/2627/00001"`. PCM: taxable 2000, CGST 50, SGST 50. SUN: taxable 55085, CGST 4958, SGST 4957. Total 67100, round-off 0, payable 67100. Snapshots: "Org A Health LLP", A_GJ's address and GSTIN, Sunita Patil, Dr. Meera Kulkarni · G-12345, issued by AF. |
+| DBL-04 | round-off: totals of 67149 and 67150; then with round-off off | payable 67100 (−49) and 67200 (+50); then payable = total, round-off 0 |
+| DBL-05 | 20 dispenses of 1 PCM tablet at A_GJ in parallel (real connections); then one that fails on its second line (`RX_QTY_EXCEEDED`); then one more | numbers `00001` … `00020`, no gap, no repeat; the failed dispense takes no number, so the next is `00021` |
+| DBL-06 | the financial-year boundary: dispenses of SUN at 2027-03-31 23:59 IST and 2027-04-01 00:01 IST | `AG/2627/…`, then `AG/2728/00001` |
+| DBL-07 | a line without `unitPricePaise` at A_GJ; then at B_GJ | 422 `PRICE_REQUIRED` with its `lineNo`; at B_GJ, 201 with an unpriced line and no bill |
+| DBL-08 | GLV (no HSN) on a dispense at A_GJ under `TAX_INVOICE`; the same in preview; then under `BILL_UNREGISTERED` | 422 `TAX_RATE_MISSING` naming GLV, and the same error in the preview; under `BILL_UNREGISTERED`, 201 with no GST columns |
+| DBL-09 | the print view of DBL-03's bill under each of the four modes, in both layouts | the title, the GSTIN, the tax columns and the composition legend exactly as in 06a §11.5's table; "Place of supply: Gujarat (24)" and "Reverse charge: No" under `TAX_INVOICE`; each batch with its expiry; no patient phone or address; `roll80` holds the same fields |
+| DBL-10 | after DBL-03: P_SUNITA is renamed, and A_GJ's legal name and prefix change | the bill still shows the old snapshots; the next bill uses the new prefix, starting at `00001` |
+| DBL-11 | AA reverses DBL-03's dispense within the window | the bill is `CANCELLED` in the same transaction and prints "CANCELLED on …"; the next bill is `00002`; `00001` is never issued again |
+| DBL-12 | after DBL-03, a patient return of 3 PCM tablets; later, the other 4 | credit notes `AG/2627/C0001` (value 900: taxable 857, CGST 22, SGST 21) and `C0002` (value 1200), both naming bill `AG/2627/00001` and its date; the credits on the line add up to 2100. Reversing the second return cancels `C0002`. |
+| DBL-13 | as the app role: UPDATE any column of a bill, bill line, credit note or credit-note line; DELETE any of them; set `CANCELLED` without a reversal | every one rejected by the triggers |
+| DBL-14 | the sales register for A_GJ, October, after DBL-03, DBL-12 and a second, cancelled bill; as JSON, CSV and print | each bill and credit note listed; the cancelled bill listed and left out of the totals; the HSN summary per HSN and rate with credit notes subtracted; the document summary per series (first, last, issued, cancelled); no field holds a patient id, name or phone; `report.exported` audited once per export; the bills' total before credit notes equals Insights' sales value for the period (DR-21) |
+| DBL-15 | AS (`store`, without `dispense.view`) reads a bill; AF (`reception`, without `stock.reports`) reads the sales register; AF reads a bill | 403 `forbidden`; 403 `forbidden`; 200 |
+| DBL-16 | `fast-check`: any net 0 … 10^9 paise, any rate 0 … 2800 bp, any split of a line into returns | taxable + CGST + SGST = net on every bill and credit-note line; CGST − SGST ∈ {0, 1}; the credits on a line never exceed its net and equal it once everything is returned; every `*Paise` field is a safe integer |
+
 ---
 
 ## 25. Events and jobs (DJ)
@@ -931,7 +962,7 @@ TOX: base `UNIT`, vial = 100, `in_use_hours` = 24 (test data). The clock is 2026
 - **DI, DN, DW, DAU, DG:** all rows, except DG-04 (master corrections).
 - **DPN:** all rows except DPN-12 (backdating).
 - **DRX-01 … 16.**
-- **DL, DP, DA, DC, DE, DU, DK, DO, DM, DR, DIM:** all rows, except those that need a Milestone 2 feature:
+- **DL, DP, DA, DC, DE, DU, DK, DO, DM, DR, DIM, DBL:** all rows, except those that need a Milestone 2 feature:
 
 | Moves to Milestone 2 | Rows |
 |---|---|
@@ -940,12 +971,12 @@ TOX: base `UNIT`, vial = 100, `in_use_hours` = 24 (test data). The clock is 2026
 | manual opening-balance adjustments, supplier returns (stock-count corrections are Milestone 1, D-42) | DE-14, DO-17, DM-13 (the supplier-return part), DE-20 (the supplier-return part) |
 | the patient merge tool | DRX-17 … 23, DC-12, DX-78 … 80 |
 | jobs, outbox, reconciliation, purges | DJ (all) |
-| tax rates; XLSX (valuation and consumption are Milestone 1 since D-48) | DU-17, DIM-07 |
+| XLSX (valuation and consumption are Milestone 1 since D-48, tax rates since D-49) | DIM-07 |
 | phone OTP | DQ (all), DX-03 |
 
 **Plus:**
 1. DC-01 and DC-11 pass 20× without a flake.
-2. An end-to-end "day at one premises" test passes: sign in, switch, receive, dispense (with an isotretinoin prescription), return, write off, reverse, print both registers.
+2. An end-to-end "day at one premises" test passes: sign in, switch, receive, dispense (with an isotretinoin prescription) and print its bill, return (and print the credit note), write off, reverse, print both registers.
 
 ### Pilot go-live (after Milestone 1)
 
@@ -955,6 +986,7 @@ TOX: base `UNIT`, vial = 100, `in_use_hours` = 24 (test data). The clock is 2026
 4. **A signed DPA** with the organisation (06 OQ-24).
 5. Counsel's review of the registers and rules (06 OQ-8, OQ-32), including a printed H1 sample with a Gujarati name.
 6. 06 OQ-1 answered.
+7. For each premises that bills, the clinic's CA has confirmed its billing mode and the bill's wording (06 OQ-3).
 
 ### Milestones 2 and 3
 
