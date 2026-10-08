@@ -20,6 +20,13 @@
   - administration writes get their idempotency key in PR 7; until then the single-use grant makes each signed write replay-proof (06 R7-2, §12.2);
   - Hindi and Gujarati are offered only after review (06 R7-3, §16);
   - §12.4's reversal example sends its grant in the `Reauth-Grant` header, like every other route.
+- Clarified while building PR 5:
+  - the parts of the catalogue that read the ledger arrive with it in PR 7: E-18 (an item's movements), E-14's batches and balances, E-12's `lowStock`, `nearExpiry` and `premisesId` filters, and the `items_freeze` trigger, which is created in migration 023 next to `stock_movements` (§6.5, §18, §19);
+  - in Milestone 1, E-15 never changes an item's identity (base unit, batch tracking, master link): those fields are not in its schema, so `ITEM_IDENTITY_LOCKED` cannot arise; a different identity is a new item (06 R7-5);
+  - E-13 creates the item's base unit itself (factor 1, named after the base unit);
+  - E-05 needs E-02 first (409 `DISPENSARY_NOT_CONFIGURED`) and runs once per premises (409 `PREMISES_ALREADY_CONFIGURED`); E-07 can also deactivate a further location, never the default store or the quarantine (422 `LOCATION_REQUIRED`);
+  - the settings history tables store each change as a full JSON snapshot of the row;
+  - the master seed: `data/master/` with `SOURCES.md`; `scripts/load-master.cjs` upserts by (`source`, `source_ref`), a reviewed unique key on the global table; every row is loaded unverified and without schedule flags until the curator confirms them (06 OQ-5, R7-6).
 
 **Rev 6.1 changes (founder round 7, D-42 … D-44):**
 - Stock-count corrections, including found stock, are Milestone 1; the dispensing PR is split in two (§19: PR 9 dispensing, PR 10 returns, write-offs, count corrections, reversals). Milestone 1 is now 13 PRs.
@@ -1000,7 +1007,7 @@ Further locations within a premises are Phase 2. Every balance and movement alre
 | `in_use_hours` | INTEGER NULL | **P1-C.** CHECK > 0. How long an opened container may be used, **copied by staff from the product label**, never computed. CHECK (`container_unit_id IS NULL`) = (`in_use_hours IS NULL`). |
 | `active` | BOOLEAN NOT NULL DEFAULT true | |
 
-Trigger `items_freeze`: once any movement exists for the item, `base_unit`, `track_batches`, `master_id` and `container_unit_id` are immutable.
+Trigger `items_freeze`: once any movement exists for the item, `base_unit`, `track_batches`, `master_id` and `container_unit_id` are immutable. It is created with the ledger (migration 023, PR 7), since it reads `stock_movements`.
 
 **`item_units`**: the pack hierarchy, stored as a direct factor to the base unit (box = 150 tablets, not "box = 10 strips").
 
@@ -2043,13 +2050,13 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | 014 | `stock_settings` + history | 5 |
 | 015 | `premises_settings` + history | 5 |
 | 016 | `stock_locations` | 5 |
-| 017 | `items`, `item_units` (+ freeze and immutability triggers); includes the nullable multi-dose columns | 5 |
+| 017 | `items`, `item_units` (+ the unit-immutability and `requires_prescription` triggers); includes the nullable multi-dose columns | 5 |
 | 018 | `suppliers` | 5 |
 | 019 | `patients` | 6 |
 | 020 | `prescriptions`, `prescription_lines` (+ immutability triggers) | 6 |
 | 021 | `prescription_images` | 6 |
 | 022 | `batches` (per premises) | 7 |
-| 023 | `stock_movements` + `stock_balances` + the validate / apply / as-of / append-only triggers. The ledger and its cache are one logical change: the cache is defined by the trigger. | 7 |
+| 023 | `stock_movements` + `stock_balances` + the validate / apply / as-of / append-only triggers; `items_freeze`. The ledger and its cache are one logical change: the cache is defined by the trigger. | 7 |
 | 024 | `idempotency_keys` | 7 |
 | 025 | `goods_receipts` (+ lines; posted-immutability trigger) | 8 |
 | 026 | `dispenses` (+ lines, allocations, the L-25 trigger); includes the nullable `LICENSED_PHARMACY` and backdate columns (R6-9) | 9 |
@@ -2082,9 +2089,9 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | **2** | **Staff identity:** org settings, roles and grants, prescribers (table), staff and memberships, devices and sessions (tables), password sign-in (A-01 … A-02, A-06, A-07, A-13, A-16), the guard, the founder CLI, the audit log; the sign-in screen | 002–010 | DN (password rows), DAU, DS/DMG for the new tables, DX-01 … 04 |
 | **3** | **The shared PC:** trusted devices, "Who's working?", the idle lock, the switch PIN, the signing PIN with the pepper, re-auth grants (A-08 … A-12, A-14, A-15); **the per-username sign-in limit (D-45)**; the device endpoints M-10, M-11 and their screen (DW-01, DW-15 need them) | 011–012 | DW, DPN-01 … 11, 13 … 17, DN-02 … 05, 22, 23 (D-45), DX-05 … 08, DX-18 |
 | **4** | **Administration:** premises, staff, roles, the audit view (M-01 … M-09, M-12) and their screens; the UI kit copied in (the devices endpoints are built in PR 3) | — | DI (administration rows), DX-09 … 17, DX-19 |
-| **5** | **Catalogue and settings:** the minimal master, stock and premises settings, locations, items and units, suppliers (E-01 … E-09, E-12 … E-18, E-20, E-21) | 013–018 | DG-01 … 03, 05 … 11; DX-33 … 37, 39 … 43, 45 |
+| **5** | **Catalogue and settings:** the minimal master, stock and premises settings, locations, items and units, suppliers (E-01 … E-09, E-12 … E-18, E-20, E-21) | 013–018 | DG-01 … 03, 05 … 07, 09 … 11 (DG-08 and the dispense halves of DG-05 and DG-09 with PR 9); DX-33 … 37, 39 … 42, 45 |
 | **6** | **People:** patients, prescribers, prescriptions (manual and photo) (P-01 … P-13) | 019–021 | DRX-01 … 16; DX-20 … 31 |
-| **7** | **Ledger:** batches, movements, balances, triggers, idempotency | 022–024 | DL (M1 rows), DP-01 … 08, 10, 12; DA; DK-01 … 03 |
+| **7** | **Ledger:** batches, movements, balances, triggers, idempotency (also on the administration writes, 06 R7-2); the catalogue's ledger reads: E-18, E-14's batches and balances, E-12's stock filters; `items_freeze` | 022–024 | DL (M1 rows), DP-01 … 08, 10, 12; DA; DK-01 … 03; DX-43 |
 | **8** | **Receiving stock** (E-23 … E-26) | 025 | DO-01 … 04; DM-04 … 06; DX-46 … 49 |
 | **9** | **Dispensing:** allocation (FEFO), preview and dispense, the M1 mode rules, `requires_prescription` (E-27 … E-30) | 026 | DE (dispensing rows), DU (except DU-17), DK, DM (M1 rules), DO (dispense rows), DC-01 … 04, 10, 11; DX-50 … 58 |
 | **10** | **Returns and corrections:** patient returns, write-offs, **stock-count corrections incl. found stock** (D-42), reversals (E-32, E-34, E-35) | 027–029 | DE-10 … 16, 20; DO (return, reversal and adjustment rows); DC-05 … 07; DPN-13; DX-60, 62, 63 |

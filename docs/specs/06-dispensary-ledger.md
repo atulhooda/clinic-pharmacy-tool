@@ -124,6 +124,8 @@
 | R7-2 | **Administration writes get their `Idempotency-Key` in PR 7,** with the idempotency table (06a §12.2) | Until then every signed write is still replay-proof: its re-auth grant is single use, so a replay gets 401 `reauth_required`. M-08 (end sessions) needs no grant and is naturally idempotent. |
 | R7-3 | **Hindi and Gujarati are offered only after a native speaker has reviewed them** (06a §16) | The kit's few strings came with the desk's drafts, themselves still unreviewed; no unreviewed translation reaches a clinic |
 | R7-4 | **The UI kit copy leaves out the desk's appointment and SLA colour tokens, its product-named token and its web fonts** (the system font stack instead) | They describe the desk's domain, not this app's; system fonts avoid a build-time download |
+| R7-5 | **In Milestone 1 an item's identity never changes after creation** (base unit, batch tracking, master link) | A unit hierarchy and every future batch are defined against the base unit; a different identity is a different item. The DB freeze (once stock has moved) still comes with the ledger. |
+| R7-6 | **The minimal master is loaded unverified and without schedule flags;** only D-32's `requires_prescription` starting values are set | Schedule classifications are regulatory facts; they are set by the curator from a reviewed source, not drafted by the engineering side (06 OQ-5). Until then an organisation adds flags on its own items. |
 
 ### Engineer's calls in Rev 4 (under D-3; veto any)
 
