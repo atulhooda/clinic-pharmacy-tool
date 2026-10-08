@@ -17,10 +17,13 @@ export type Rule =
   /** A map of keys to booleans, e.g. permission overrides: {"stock.view": true}. */
   | (Base & { type: 'flags'; max?: number; keyPattern?: RegExp })
   | (Base & { type: 'string[]'; max?: number; itemMax?: number; itemPattern?: RegExp; oneOf?: readonly string[] })
-  | (Base & { type: 'int[]'; max?: number; min?: number; itemMin?: number; itemMax?: number });
+  | (Base & { type: 'int[]'; max?: number; min?: number; itemMin?: number; itemMax?: number })
+  /** An array of plain objects, each validated in depth by the route's own parser (e.g. a delivery's lines). */
+  | (Base & { type: 'objects'; max?: number });
 type Value<R> = R extends { type: 'string' } ? string : R extends { type: 'int' } ? number : R extends { type: 'bool' } ? boolean
   : R extends { type: 'uuid' } ? string : R extends { type: 'uuid[]' } ? string[] : R extends { type: 'flags' } ? Record<string, boolean>
-  : R extends { type: 'string[]' } ? string[] : R extends { type: 'int[]' } ? number[] : never;
+  : R extends { type: 'string[]' } ? string[] : R extends { type: 'int[]' } ? number[]
+  : R extends { type: 'objects' } ? Record<string, unknown>[] : never;
 type Out<S extends Record<string, Rule>> = {
   [K in keyof S]: Value<S[K]> | (S[K]['nullable'] extends true ? null : never) | (S[K]['optional'] extends true ? undefined : never)
 };
@@ -46,6 +49,9 @@ function check(key: string, rule: Rule, v: unknown): unknown {
     case 'uuid':
       if (typeof v !== 'string' || !UUID_PATTERN.test(v)) throw invalid(key, 'format');
       return v.toLowerCase();
+    case 'objects':
+      if (!Array.isArray(v) || v.length > (rule.max ?? 200) || !v.every((x) => x !== null && typeof x === 'object' && !Array.isArray(x))) throw invalid(key, 'type');
+      return v;
     case 'uuid[]': {
       if (!Array.isArray(v) || v.length > (rule.max ?? 100)) throw invalid(key, 'type');
       if (!v.every((x) => typeof x === 'string' && UUID_PATTERN.test(x))) throw invalid(key, 'format');

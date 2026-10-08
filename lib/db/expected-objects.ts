@@ -60,4 +60,9 @@ export const EXPECTED_OBJECTS: readonly ExpectedObject[] = [
   { kind: 'constraint', table: 'stock_balances', name: 'stock_balances_on_hand', since: 20 },
   { kind: 'constraint', table: 'stock_balances', name: 'stock_balances_key', since: 20 },
   { kind: 'constraint', table: 'idempotency_keys', name: 'idempotency_keys_key', since: 21 },
+  { kind: 'trigger', table: 'goods_receipts', name: 'goods_receipts_guard', since: 22 },
+  { kind: 'trigger', table: 'goods_receipt_lines', name: 'goods_receipt_lines_guard', since: 22 },
+  { kind: 'constraint', table: 'goods_receipts', name: 'goods_receipts_received_after_invoice', since: 22 },
+  { kind: 'constraint', table: 'goods_receipts', name: 'goods_receipts_posted', since: 22 },
+  { kind: 'constraint', table: 'goods_receipt_lines', name: 'goods_receipt_lines_batch', since: 22 },
 ];

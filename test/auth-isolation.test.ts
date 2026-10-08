@@ -47,6 +47,11 @@ import { GET as dItems, POST as dItemsPost } from '../app/api/dispensary/items/r
 import { GET as dItem, PATCH as dItemPatch } from '../app/api/dispensary/items/[id]/route';
 import { POST as dUnitPost } from '../app/api/dispensary/items/[id]/units/route';
 import { GET as dMovements } from '../app/api/dispensary/items/[id]/movements/route';
+import { GET as dGrns, POST as dGrnPost } from '../app/api/dispensary/goods-receipts/route';
+import { GET as dGrn, PATCH as dGrnPatch } from '../app/api/dispensary/goods-receipts/[id]/route';
+import { POST as dGrnPostIt } from '../app/api/dispensary/goods-receipts/[id]/post/route';
+import { POST as dGrnDiscard } from '../app/api/dispensary/goods-receipts/[id]/discard/route';
+import { GET as dStatement } from '../app/api/dispensary/reports/stock-statement/route';
 import { PATCH as dUnitPatch } from '../app/api/dispensary/items/[id]/units/[unitId]/route';
 import { GET as dSuppliers, POST as dSuppliersPost } from '../app/api/dispensary/suppliers/route';
 import { GET as dSupplier, PATCH as dSupplierPatch } from '../app/api/dispensary/suppliers/[id]/route';
@@ -144,6 +149,11 @@ const HANDLERS: Record<string, Record<string, unknown>> = {
   '/api/dispensary/items/[id]/movements': { GET: dMovements },
   '/api/dispensary/items/[id]/units': { POST: dUnitPost },
   '/api/dispensary/items/[id]/units/[unitId]': { PATCH: dUnitPatch },
+  '/api/dispensary/goods-receipts': { GET: dGrns, POST: dGrnPost },
+  '/api/dispensary/goods-receipts/[id]': { GET: dGrn, PATCH: dGrnPatch },
+  '/api/dispensary/goods-receipts/[id]/post': { POST: dGrnPostIt },
+  '/api/dispensary/goods-receipts/[id]/discard': { POST: dGrnDiscard },
+  '/api/dispensary/reports/stock-statement': { GET: dStatement },
   '/api/dispensary/suppliers': { GET: dSuppliers, POST: dSuppliersPost },
   '/api/dispensary/suppliers/[id]': { GET: dSupplier, PATCH: dSupplierPatch },
 };

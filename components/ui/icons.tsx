@@ -116,6 +116,9 @@ export const IconTruck = ({ className }: P) => (
 export const IconSliders = ({ className }: P) => (
   <svg {...base(className)}><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="18" cy="18" r="2" /></svg>
 );
+export const IconInbox = ({ className }: P) => (
+  <svg {...base(className)}><path d="M12 3v10M8 9l4 4 4-4" /><path d="M3 14h5l1.5 3h5L16 14h5v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5Z" /></svg>
+);
 export const IconUser = ({ className }: P) => (
   <svg {...base(className)}><circle cx="12" cy="8" r="4" /><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" /></svg>
 );

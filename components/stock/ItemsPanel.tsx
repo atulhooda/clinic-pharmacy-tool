@@ -9,6 +9,7 @@ import { TextField, SelectField } from '@/components/ui/Field';
 import FilterPills from '@/components/ui/FilterPills';
 import SearchField from '@/components/ui/SearchField';
 import KpiCard from '@/components/ui/KpiCard';
+import Combobox from '@/components/ui/Combobox';
 import { IconPlus } from '@/components/ui/icons';
 import { en } from '@/lib/i18n/en';
 import { fmtPaise } from '@/lib/money';
@@ -21,7 +22,7 @@ type Stock = { onHandBase: number; dispensableBase: number; quarantinedBase: num
   lowStock: boolean; nearExpiry: boolean };
 type BatchRow = { id: string; batchNo: string; expiryDate: string; expired: boolean; mrpPaise: number; mrpUnitName: string; onHandBase: number;
   locations: { locationId: string; name: string; kind: string; onHandBase: number }[] };
-type Item = { id: string; displayName: string; category: string; baseUnit: string; scheduleFlags: string[]; extraScheduleFlags: string[];
+type Item = { id: string; masterId: string | null; displayName: string; category: string; baseUnit: string; scheduleFlags: string[]; extraScheduleFlags: string[];
   requiresPrescription: boolean; requiresPrescriptionImposed: boolean; reorderLevel: number | null; rackLocation: string | null; units?: Unit[];
   stock?: Stock & { batches?: BatchRow[]; untracked?: { locationId: string; name: string; kind: string; onHandBase: number }[] } };
 type Movement = { id: string; type: string; qtyDelta: number; locationName: string; batchNo: string | null; actorLabel: string; occurredAt: string; reasonCode: string | null };
@@ -37,7 +38,6 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
   const [cat, setCat] = useState<'ALL' | string>('ALL');
   const [items, setItems] = useState<Item[]>([]);
   const [adding, setAdding] = useState(false);
-  const [mq, setMq] = useState('');
   const [masters, setMasters] = useState<Master[]>([]);
   const [draft, setDraft] = useState({ masterId: null as string | null, displayName: '', category: 'MEDICINE', baseUnit: 'TABLET' });
   const [open, setOpen] = useState<Item | null>(null);
@@ -60,10 +60,25 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
     await loadHistory(id, null);
   };
 
-  async function searchMaster(e: FormEvent) {
-    e.preventDefault();
-    const r = await api<{ items: Master[] }>(`/api/dispensary/master?q=${encodeURIComponent(mq)}`);
+  /** Every medicine in one dropdown: the clinic's own items first, then the medicine list. */
+  async function openAdd() {
+    setError(null);
+    setAdding(true);
+    setDraft({ masterId: null, displayName: '', category: 'MEDICINE', baseUnit: 'TABLET' });
+    const r = await api<{ items: Master[] }>('/api/dispensary/master?limit=200');
     if (r.ok) setMasters(r.body.items);
+  }
+  const linked = new Set(items.map((i) => i.masterId).filter(Boolean));
+  const pickOpts = [
+    ...items.map((i) => ({ value: `item:${i.id}`, label: i.displayName, sub: `${t.alreadyYours} · ${unitWord(i.stock?.onHandBase ?? 0, i.baseUnit)}` })),
+    ...masters.filter((m) => !linked.has(m.id)).map((m) => ({ value: `master:${m.id}`, label: m.brandName, sub: `${t.medicineList} · ${m.dosageForm.toLowerCase()}` })),
+  ];
+  function pick(v: string | null) {
+    if (!v) return;
+    const [kind, id] = v.split(':');
+    if (kind === 'item') { setAdding(false); void reopen(id); return; }
+    const m = masters.find((x) => x.id === id);
+    if (m) setDraft({ masterId: m.id, displayName: m.brandName, category: 'MEDICINE', baseUnit: m.suggestedBaseUnit ?? 'TABLET' });
   }
   async function create(e: FormEvent) {
     e.preventDefault();
@@ -126,7 +141,7 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
           { key: 'EXPIRED', label: t.expiredBadge, count: expired },
         ]} />
         {canEdit && (
-          <Button variant="brutal-blue" className="md:ml-auto" onClick={() => { setError(null); setAdding(true); setMasters([]); }}>
+          <Button variant="brutal-blue" className="md:ml-auto" onClick={() => void openAdd()}>
             <IconPlus className="h-4 w-4" /> {t.addItem}
           </Button>
         )}
@@ -152,20 +167,13 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
       </div>
       <Sheet open={adding} onOpenChange={setAdding} title={t.addItem} wide>
         <div className="space-y-4">
-          <form onSubmit={searchMaster} className="flex items-end gap-2">
-            <TextField label={t.fromMaster} value={mq} onChange={(e) => setMq(e.target.value)} className="flex-1" />
-            <Button type="submit">→</Button>
-          </form>
-          <ul className="max-h-48 overflow-y-auto divide-y divide-hairline">
-            {masters.map((m) => (
-              <li key={m.id}>
-                <button type="button" className={`w-full px-2 py-2 text-left text-small ${draft.masterId === m.id ? 'bg-brand-tint' : ''}`}
-                  onClick={() => setDraft({ masterId: m.id, displayName: m.brandName, category: 'MEDICINE', baseUnit: m.suggestedBaseUnit ?? 'TABLET' })}>
-                  {m.brandName} <span className="text-muted">· {m.dosageForm}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
+          <div>
+            <span className="block text-small font-medium text-ink-soft">{t.allMedicines}</span>
+            <div className="mt-1">
+              <Combobox items={pickOpts} value={draft.masterId ? `master:${draft.masterId}` : null} onChange={pick} placeholder={t.pickMedicine} emptyText={t.noMatch} />
+            </div>
+            <p className="mt-1 text-micro text-muted">{t.pickHint}</p>
+          </div>
           <p className="text-micro text-muted">{t.custom}</p>
           <form onSubmit={create} className="space-y-3" noValidate>
             <TextField label={t.displayName} value={draft.displayName} maxLength={120} onChange={(e) => setDraft({ ...draft, displayName: e.target.value })} />

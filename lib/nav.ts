@@ -5,7 +5,7 @@ import type { Permission } from './auth/permissions';
  * (768–1023px) and the phone's bottom bar (<768px) all render from it, filtered by what the
  * signed-in person may open. Later milestones add Patients, Dispense and Registers here.
  */
-export type IconKey = 'today' | 'box' | 'truck' | 'sliders' | 'settings';
+export type IconKey = 'today' | 'box' | 'truck' | 'sliders' | 'settings' | 'inbox' | 'ledger';
 export interface NavItem {
   key: string;
   href: string;
@@ -20,6 +20,8 @@ export interface NavItem {
 export const NAV: readonly NavItem[] = [
   { key: 'today', href: '/', icon: 'today', label: 'Today', match: ['/'] },
   { key: 'stock', href: '/stock/items', icon: 'box', label: 'Stock', permission: 'stock.view', match: ['/stock/items'] },
+  { key: 'receive', href: '/stock/receive', icon: 'inbox', label: 'Receive', permission: 'stock.view', match: ['/stock/receive'] },
+  { key: 'statement', href: '/stock/statement', icon: 'ledger', label: 'Statement', permission: 'stock.view', match: ['/stock/statement'] },
   { key: 'suppliers', href: '/stock/suppliers', icon: 'truck', label: 'Suppliers', permission: 'stock.view', match: ['/stock/suppliers'] },
   { key: 'setup', href: '/stock/setup', icon: 'sliders', label: 'Dispensary', permission: 'stock.view', match: ['/stock/setup'] },
   { key: 'settings', href: '/settings', icon: 'settings', label: 'Settings', match: ['/settings', '/account'] },

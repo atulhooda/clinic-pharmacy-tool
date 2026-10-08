@@ -43,6 +43,9 @@ interface World {
   batchId: string;
   /** An OPENING_BALANCE of +100 of batchId at locationId. */
   movementId: string;
+  supplierId: string;
+  /** A draft delivery at the world's premises and location. */
+  grnId: string;
 }
 const worlds = new Map<string, World>();
 async function world(org: OrgFixture): Promise<World> {
@@ -72,7 +75,10 @@ async function world(org: OrgFixture): Promise<World> {
       [org.orgId, org.premisesId, itemId, batchId, locationId, staff.id])).rows[0].id as string;
     const bareItemId = (await c.query(`INSERT INTO items (org_id, category, display_name, base_unit, track_batches) VALUES ($1, 'INJECTABLE', $2, 'UNIT', true) RETURNING id`,
       [org.orgId, `Bare item ${org.orgId.slice(0, 6)}`])).rows[0].id as string;
-    return { stockSettingsId, premisesSettingsId, itemId, unitId, bareItemId, locationId, batchId, movementId };
+    const supplierId = (await c.query(`INSERT INTO suppliers (org_id, name) VALUES ($1, $2) RETURNING id`, [org.orgId, `World supplier ${org.orgId.slice(0, 6)}`])).rows[0].id as string;
+    const grnId = (await c.query(`INSERT INTO goods_receipts (org_id, premises_id, location_id, supplier_id, invoice_no, invoice_date, created_by, created_at, updated_at)
+                                  VALUES ($1, $2, $3, $4, 'W-1', '2026-10-01', $5, now(), now()) RETURNING id`, [org.orgId, org.premisesId, locationId, supplierId, staff.id])).rows[0].id as string;
+    return { stockSettingsId, premisesSettingsId, itemId, unitId, bareItemId, locationId, batchId, movementId, supplierId, grnId };
   });
   const w = { staffId: staff.id, prescriberId, deviceId, sessionId, settingsId, ...stock };
   worlds.set(org.orgId, w);
@@ -94,6 +100,24 @@ function movement(o: OrgFixture, v: { premisesId?: string; itemId: string; batch
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'B', now(), now(), $11, $12, $13)`, [...vals, v.seq]);
   }
   return inTenant(o, `INSERT INTO stock_movements (${cols}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'B', now(), now(), $11, $12)`, vals);
+}
+
+/** A delivery header in o; `extra` overrides columns. */
+function grn(o: OrgFixture, w: World, extra: Record<string, unknown> = {}): Promise<string> {
+  const row: Record<string, unknown> = { org_id: o.orgId, premises_id: o.premisesId, location_id: w.locationId, supplier_id: w.supplierId,
+    invoice_no: `I-${randomUUID().slice(0, 8)}`, invoice_date: '2026-10-01', created_by: w.staffId, created_at: new Date(), updated_at: new Date(), ...extra };
+  const cols = Object.keys(row);
+  return inTenant(o, `INSERT INTO goods_receipts (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`, Object.values(row));
+}
+/** A posted delivery header (every column posting sets). */
+const posted = (w: World) => ({ status: 'POSTED', posted_at: new Date(), posted_by: w.staffId, received_at: new Date(), received_by: w.staffId,
+  supplier_name_snapshot: 'S', supplier_licence_numbers_snapshot: [], reason_after_minutes_snapshot: 120 });
+/** A delivery line in o (on the world's draft unless stated). */
+function grnLine(o: OrgFixture, w: World, extra: Record<string, unknown> = {}): Promise<string> {
+  const row: Record<string, unknown> = { org_id: o.orgId, premises_id: o.premisesId, goods_receipt_id: w.grnId, line_no: 1 + Math.floor(Math.random() * 499),
+    item_id: w.itemId, purchase_unit_id: w.unitId, base_units_per_unit_snapshot: 10, qty: 1, purchase_rate_paise: 100, ...extra };
+  const cols = Object.keys(row);
+  return inTenant(o, `INSERT INTO goods_receipt_lines (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`, Object.values(row));
 }
 
 let hashCache: string | undefined;
@@ -284,6 +308,54 @@ export const FK_BUILDERS: Record<string, FkBuilder> = {
     return inTenant(a, `INSERT INTO idempotency_keys (org_id, key, request_sha256, method, path, staff_user_id) VALUES ($1, 'fk-key-0001', repeat('a', 64), 'POST', '/api/x', $2)`,
       [a.orgId, wb.staffId]);
   },
+  async goods_receipts_premises_fk(a, b) {
+    const wa = await world(a); await world(b);
+    return grn(a, wa, { premises_id: b.premisesId });
+  },
+  async goods_receipts_location_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return grn(a, wa, { location_id: wb.locationId });
+  },
+  async goods_receipts_supplier_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return grn(a, wa, { supplier_id: wb.supplierId });
+  },
+  async goods_receipts_created_by_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return grn(a, wa, { created_by: wb.staffId });
+  },
+  async goods_receipts_received_by_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return inTenant(a, 'UPDATE goods_receipts SET received_by = $3 WHERE org_id = $1 AND id = $2', [a.orgId, wa.grnId, wb.staffId]);
+  },
+  async goods_receipts_posted_by_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return inTenant(a, 'UPDATE goods_receipts SET posted_by = $3 WHERE org_id = $1 AND id = $2', [a.orgId, wa.grnId, wb.staffId]);
+  },
+  async goods_receipts_discarded_by_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return inTenant(a, 'UPDATE goods_receipts SET discarded_by = $3 WHERE org_id = $1 AND id = $2', [a.orgId, wa.grnId, wb.staffId]);
+  },
+  async goods_receipt_lines_receipt_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return grnLine(a, wa, { goods_receipt_id: wb.grnId });
+  },
+  async goods_receipt_lines_item_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return grnLine(a, wa, { item_id: wb.itemId });
+  },
+  async goods_receipt_lines_unit_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return grnLine(a, wa, { purchase_unit_id: wb.unitId });
+  },
+  async goods_receipt_lines_mrp_unit_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return grnLine(a, wa, { mrp_unit_id: wb.unitId });
+  },
+  async goods_receipt_lines_batch_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return grnLine(a, wa, { batch_id: wb.batchId, batch_no: 'W1', expiry_date: '2099-12-31', mrp_paise: 1000, mrp_unit_id: wa.unitId });
+  },
   async device_state_session_fk(a, b) {
     const [wa, wb] = [await world(a), await world(b)];
     return inTenant(a, 'INSERT INTO device_state (org_id, device_id, active_session_id) VALUES ($1, $2, $3)', [a.orgId, wa.deviceId, wb.sessionId]);
@@ -352,6 +424,24 @@ export const UNIQUE_BUILDERS: Record<string, UniqueBuilder> = {
     const [wa, wb] = [await world(a), await world(b)];
     return twice(a, b, (o) => inTenant(o, `INSERT INTO idempotency_keys (org_id, key, request_sha256, method, path, staff_user_id) VALUES ($1, 'same-key-0001', repeat('b', 64), 'POST', '/api/x', $2)`,
       [o.orgId, (o === a ? wa : wb).staffId]));
+  },
+  async goods_receipts_premises_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    const id = randomUUID();
+    return twice(a, b, (o) => grn(o, o === a ? wa : wb, { id }));
+  },
+  async goods_receipts_invoice_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return twice(a, b, (o, v) => { const w = o === a ? wa : wb; return grn(o, w, { invoice_no: v === 'again' ? 'inv-77' : 'INV-77', ...posted(w) }); });
+  },
+  async goods_receipt_lines_premises_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    const id = randomUUID();
+    return twice(a, b, (o) => grnLine(o, o === a ? wa : wb, { id }));
+  },
+  async goods_receipt_lines_line_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return twice(a, b, (o) => grnLine(o, o === a ? wa : wb, { line_no: 500 }));
   },
   async premises_name_key(a, b) {
     return twice(a, b, (o, v) => inTenant(o, 'INSERT INTO premises (org_id, name, address, state_code) VALUES ($1, $2, $3, $4)',
