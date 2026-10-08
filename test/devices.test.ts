@@ -275,6 +275,17 @@ test('DW-15: revoking a PC ends every session on it at the next request; its coo
   assert.equal((await me(pc)).status, 200);
 });
 
+test('DW-15 (guard): a PC revoked outside M-11 still ends its sessions on their next request', async () => {
+  const { org, owner, af } = await world('dw15g');
+  const pc = await trustedPc(org, owner);
+  await pc.signIn(org.slug, af.login, af.password);
+  // Only the device row changes (e.g. a support fix in SQL); its sessions are still open.
+  await inOrg(org.orgId, (c) => c.query('UPDATE devices SET revoked_at = now(), revoked_by = $2 WHERE org_id = $1', [org.orgId, owner.id]));
+  assert.deepEqual([(await me(pc)).status, (await me(pc)).body.code], [401, 'session_revoked']);
+  const reason = await inOrg(org.orgId, async (c) => (await c.query('SELECT revoked_reason AS r FROM sessions WHERE staff_user_id = $1', [af.id])).rows[0].r);
+  assert.equal(reason, 'device_revoked');
+});
+
 test('DW-16: on a trusted PC, a person without a switch PIN can only set one or sign out', async () => {
   const { org, owner } = await world('dw16');
   const nopin = await createStaff(org, { switchPin: null, signingPin: null });
