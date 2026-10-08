@@ -251,6 +251,7 @@ DX-76 fails the build if any route lacks a row here.
 | DX-79 | P-16 merge with `mergedId = P_AYESHA`, or `survivorId = P_AYESHA` | — | 404 `PATIENT_NOT_FOUND`; no `patient_merges` row in either organisation |
 | DX-80 | P-17 undo | B's merge | 404 `MERGE_NOT_FOUND`; B's merge still in force |
 | DX-81 | E-45 the stock statement | B_GJ; and with no `premisesId` | 404 `PREMISES_NOT_FOUND`, identical to `NONEXIST`; the organisation-wide statement has none of B's items or movements |
+| DX-82 | E-46 Insights | B_GJ; and with no `premisesId` | 404 `PREMISES_NOT_FOUND`, identical to `NONEXIST`; the organisation-wide numbers include none of B's dispenses, receipts or stock |
 | **Stock** | | | |
 | DX-33 | E-01 / E-02 / E-03 settings | — | reads and writes A's only; E-02 on a configured A → 409 `ALREADY_CONFIGURED`; B's row unchanged |
 | DX-34 | E-04 `GET /dispensary/premises` | — | A_GJ and A_MH only |
@@ -814,6 +815,10 @@ TOX: base `UNIT`, vial = 100, `in_use_hours` = 24 (test data). The clock is 2026
 | DR-18 | the statement for 1–15 October and for 16–31 October | the second period's Opening equals the first's Balance for every item; a movement at 15 October 23:59 IST is in the first, one at 16 October 00:01 IST in the second |
 | DR-19 | the statement with no `premisesId` (the owner) | each item's columns equal A_GJ + A_MH; AF (A_GJ only) gets A_GJ's alone; a premises outside the caller's membership → 404 `PREMISES_NOT_FOUND` |
 | DR-20 | the statement as CSV and as the print view | the same numbers; base units and packs; the print header names the premises and the period; no field holds a patient id, name or phone; `report.exported` audited once per export |
+| DR-21 | **Insights (D-48)** for A_GJ, a seeded October: priced and unpriced dispenses, a reversed dispense, a patient return, two GRNs | dispenses, patients served, units issued, sales value, unpriced lines and purchase value each equal a hand-computed fixture; the reversed dispense and the returned units are netted out on their own dates |
+| DR-22 | the periods on 2026-10-07 (a Wednesday) | `this_week` = 5–7 Oct, `last_week` = 28 Sep–4 Oct, `last_month` = September, all in IST; a dispense at 2026-10-04 23:59 IST is in last week, one at 2026-10-05 00:01 IST in this week; each period's comparison is the period before of the same kind |
+| DR-23 | top items, sales by day and by prescriber, stock health and value for the same month | the ten top items by units and by value with packs; one bar per IST day; by-prescriber totals add up to the sales totals; the health counts equal the low-stock, expiry and non-moving reports; the values equal DR-09 |
+| DR-24 | Insights with no `premisesId`, as the owner and as AF; and a scan of every Insights response | the owner's numbers equal A_GJ + A_MH; AF's are A_GJ's alone; no field holds a patient id, name or phone, or prescription text; every `*Paise` field is a safe integer |
 
 ---
 
@@ -935,7 +940,7 @@ TOX: base `UNIT`, vial = 100, `in_use_hours` = 24 (test data). The clock is 2026
 | manual opening-balance adjustments, supplier returns (stock-count corrections are Milestone 1, D-42) | DE-14, DO-17, DM-13 (the supplier-return part), DE-20 (the supplier-return part) |
 | the patient merge tool | DRX-17 … 23, DC-12, DX-78 … 80 |
 | jobs, outbox, reconciliation, purges | DJ (all) |
-| tax rates; valuation and consumption reports; XLSX | DU-17, DR-08, DR-09, DIM-07 |
+| tax rates; XLSX (valuation and consumption are Milestone 1 since D-48) | DU-17, DIM-07 |
 | phone OTP | DQ (all), DX-03 |
 
 **Plus:**

@@ -8,6 +8,7 @@
 **Index, decisions, open questions:** [06](06-dispensary-ledger.md) · **Acceptance gate:** [06b](06b-dispensary-ledger.acceptance.md)
 
 **Rev 6.2 changes (founder review of PR 2, D-45 … D-47):**
+- **Insights (D-48):** sales by period with comparisons, top items, by prescriber, receiving, stock health and value (§14, E-46); a new PR 12, so import is PR 13 and pilot readiness PR 14 (§19). The consumption, valuation and non-moving reports join Milestone 1.
 - **The stock statement (D-47):** opening + received − issued = balance, per item and period (§14, E-45, §19 PR 11); each item's balance on the Stock page from PR 7.
 - Failed sign-ins are counted **per submitted username**, whether or not the account exists; after 5 failures the answer is 429 `too_many_attempts` for both (§3.3, §3.8). The counter moves to a new table, `sign_in_throttle`, holding only an HMAC of the login (§6.1, R6-10).
 - Migration 012 is `sign_in_throttle` (PR 3); the later migrations move up by one (§18, §19).
@@ -1804,6 +1805,7 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | E-41 | `POST /dispensary/imports` (multipart, `locationId`) | `stock.import` | 413 `FILE_TOO_LARGE`; 422 `UNSUPPORTED_FORMAT` |
 | E-42 | `GET /dispensary/imports/{id}`, `GET …/rows` | `stock.import` | the dry-run report |
 | E-43 | `PATCH /dispensary/imports/{id}/rows/{rowId}` | `stock.import` | confirm, custom, skip, fix |
+| E-46 | `GET /dispensary/insights?premisesId=&period=&from=&to=` | `stock.reports` | D-48, §14. `period` in (`today`, `yesterday`, `this_week`, `last_week`, `this_month`, `last_month`, `last_30_days`, `custom`); `custom` needs `from` and `to` (≤ 366 days, else 422 `PERIOD_TOO_LONG`). Returns the measures and the previous period's. |
 | E-45 | `GET /dispensary/reports/stock-statement?premisesId=&from=&to=&format=` | `stock.view` | D-47, §14. `premisesId` omitted = the organisation (the caller's premises; the owner: all); `format` = `json` (default), `csv` or `print`; 422 `PERIOD_TOO_LONG` (> 366 days). It holds no patient data, so it needs no signing grant; an export is still audited (`report.exported`). |
 | E-44 | `POST /dispensary/imports/{id}/{validate, commit, abandon}` | `stock.import` (+ grant `stock.import_commit` for commit) | 409 `IMPORT_HAS_ERRORS`, `IMPORT_ALREADY_COMMITTED` |
 
@@ -1897,6 +1899,15 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | Consumption | the organisation, or `premisesId` | `DISPENSE` + `PROCEDURE_USE` movements, net of their reversals and returns | by item, by prescriber, by procedure type or performing prescriber, by IST day/week/month |
 | Non-moving | the organisation, or `premisesId` | balances × movements | `on_hand > 0` and no use in the last N days (default 90) |
 | Valuation | the organisation, or `premisesId`; `as_of` | Σ movements with `occurred_at ≤` the end of the `as_of` IST day | • **At cost:** on-hand × the batch's cost per base unit, where cost = Σ(qty × rate − discount) / Σ((qty + free) × factor) over that batch's receipt lines, rounded half-up once per batch total. Opening balances without cost show "cost unknown".<br>• **At MRP:** on-hand × `M/n`, floored once per batch total. |
+
+**Insights (D-48)** is one page over the same sources, never a second store of numbers:
+- **Periods,** in IST days: today, yesterday, this week (Monday to today), last week (the previous Monday–Sunday), this month, last month, the last 30 days, or `from`–`to` (≤ 366 days). Each is compared with the period before it of the same kind (last month with the month before), as a difference and a percentage.
+- **Sales:** dispenses that stand (reversed ones drop out on the reversal's date); patients served (a distinct count, nothing else about them); units issued, net of patient returns; sales value = Σ `net_paise` of those dispense lines (unpriced lines count in units, and are reported as unpriced).
+- **Top items** by units and by value (ten each, with packs); **sales by IST day** (bars); **by prescriber** (the consumption report, DR-08).
+- **Receiving:** GRNs posted and their purchase value (Σ qty × rate − discount).
+- **Stock health, now:** items below their reorder level, batches inside the first near-expiry window, expired stock on hand, quarantined stock, non-moving stock (on hand, nothing issued in 90 days).
+- **Stock value, now:** at cost and at MRP (the valuation report, DR-09), with "cost unknown" for opening stock entered without a cost.
+- **Scope:** a premises, or the organisation within the caller's premises (the owner: all). Aggregates only: no patient name, phone or prescription text appears anywhere. Money is integer paise (DH-11).
 
 - **Stock overview** shows units held in lapsed containers as "discard pending" (P1-C).
 - **Exports:** CSV in UTF-8 with a BOM, `DD-MM-YYYY HH:mm` IST, and rupees with 2 decimals, formatted from paise by integer formatting.
@@ -2067,7 +2078,7 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | 027 | `patient_returns` (+ lines) | 10 |
 | 028 | `stock_adjustments` (+ lines: write-offs, stock-count corrections incl. found stock; `opened_container_id` nullable, its FK added in Milestone 2) | 10 |
 | 029 | `stock_reversals` | 10 |
-| 030 | `stock_imports`, `stock_import_rows` | 12 |
+| 030 | `stock_imports`, `stock_import_rows` | 13 |
 
 **Milestone 2, numbered when built:** `otp_challenges`, `item_tax_rates`, `procedure_types`, `patient_merges` (+ the `patient_canonical` view), `opened_containers` (+ the FK on `stock_adjustment_lines`), `procedure_uses`, `supplier_returns`, `outbox_events`, `ledger_reconciliation_runs`, `master_correction_requests` (+ the `curation_*` policies).
 
@@ -2100,8 +2111,9 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | **9** | **Dispensing:** allocation (FEFO), preview and dispense, the M1 mode rules, `requires_prescription` (E-27 … E-30) | 026 | DE (dispensing rows), DU (except DU-17), DK, DM (M1 rules), DO (dispense rows), DC-01 … 04, 10, 11; DX-50 … 58 |
 | **10** | **Returns and corrections:** patient returns, write-offs, **stock-count corrections incl. found stock** (D-42), reversals (E-32, E-34, E-35) | 027–029 | DE-10 … 16, 20; DO (return, reversal and adjustment rows); DC-05 … 07; DPN-13; DX-60, 62, 63 |
 | **11** | **Views and registers:** stock overview, low stock, near expiry; **the stock statement (E-45, D-47)**; the H1 and purchase registers, print and CSV (E-38 … E-40) | — | DR (M1 rows, DR-17 … 20 included); DX-65 … 68, DX-81 |
-| **12** | **CSV import of opening stock** (E-41 … E-44) | 030 | DIM (CSV rows); DX-69 … 72 |
-| **13** | **Pilot readiness:** the stock screens finished; an end-to-end "day at one premises" test; a demo seed script | — | the Milestone 1 gate (06b §30) |
+| **12** | **Insights (D-48):** the page and E-46; the consumption, valuation and non-moving reports | — | DR-08, DR-09, DR-21 … 24; DX-82 |
+| **13** | **CSV import of opening stock** (E-41 … E-44) | 030 | DIM (CSV rows); DX-69 … 72 |
+| **14** | **Pilot readiness:** the stock screens finished; an end-to-end "day at one premises" test; a demo seed script | — | the Milestone 1 gate (06b §30) |
 
 Each PR follows the same order: migrations → queries/service → tests → routes → UI.
 
