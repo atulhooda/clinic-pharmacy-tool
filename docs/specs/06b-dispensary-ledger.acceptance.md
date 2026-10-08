@@ -250,6 +250,7 @@ DX-76 fails the build if any route lacks a row here.
 | DX-78 | P-15 likely duplicates, while B also has a patient with Sunita's name and phone | — | pairs within A only; B's patient never appears |
 | DX-79 | P-16 merge with `mergedId = P_AYESHA`, or `survivorId = P_AYESHA` | — | 404 `PATIENT_NOT_FOUND`; no `patient_merges` row in either organisation |
 | DX-80 | P-17 undo | B's merge | 404 `MERGE_NOT_FOUND`; B's merge still in force |
+| DX-81 | E-45 the stock statement | B_GJ; and with no `premisesId` | 404 `PREMISES_NOT_FOUND`, identical to `NONEXIST`; the organisation-wide statement has none of B's items or movements |
 | **Stock** | | | |
 | DX-33 | E-01 / E-02 / E-03 settings | — | reads and writes A's only; E-02 on a configured A → 409 `ALREADY_CONFIGURED`; B's row unchanged |
 | DX-34 | E-04 `GET /dispensary/premises` | — | A_GJ and A_MH only |
@@ -809,6 +810,10 @@ TOX: base `UNIT`, vial = 100, `in_use_hours` = 24 (test data). The clock is 2026
 | DR-14 | the lapsed-use report under `DOCTOR_OVERRIDE`, after DV-16 | one row: prescriber, item, batch, container, units, minutes past `discard_after`, reason; no patient name |
 | DR-15 | the entry-lag report after the DT suite | the lag distribution by role and document type; the share beyond the reason-free lag; no patient fields |
 | DR-16 | the H1 register print view | The HTML has a header block that repeats on every printed page (premises name, address, state, licences, period). Patient names are text, never images: a fixture name in Gujarati script appears as Unicode text. A person checks a printed sample before go-live (§30). |
+| DR-17 | **the stock statement (D-47)** for A_GJ, October, after a seeded month: an opening balance, two GRNs, dispenses, a patient return, an expiry write-off, a found-stock correction and a reversed dispense | for every item: Opening + Received − Issued + Returned + Other = Balance, each column equal to a hand-computed fixture; Balance equals Σ `qty_delta` up to the end of 31 October IST; the reversed dispense nets out of Issued on the reversal's date |
+| DR-18 | the statement for 1–15 October and for 16–31 October | the second period's Opening equals the first's Balance for every item; a movement at 15 October 23:59 IST is in the first, one at 16 October 00:01 IST in the second |
+| DR-19 | the statement with no `premisesId` (the owner) | each item's columns equal A_GJ + A_MH; AF (A_GJ only) gets A_GJ's alone; a premises outside the caller's membership → 404 `PREMISES_NOT_FOUND` |
+| DR-20 | the statement as CSV and as the print view | the same numbers; base units and packs; the print header names the premises and the period; no field holds a patient id, name or phone; `report.exported` audited once per export |
 
 ---
 
