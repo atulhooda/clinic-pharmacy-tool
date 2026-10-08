@@ -111,6 +111,7 @@
 | ID | Decision | Reflected in |
 |---|---|---|
 | D-47 | **A stock statement in Milestone 1:** for any period and premises, per item, **opening stock + new supply (received) − issued = balance**, with patient returns and the other movements (write-offs, count corrections, opening entries, reversals) in their own columns so the sum always balances. The clinic's words: "balance is important". The Stock page shows each item's balance as soon as stock moves (PR 7); the full statement, with print and CSV, comes with the other views (PR 11). | §5; 06a §14, §12.3 (E-45), §19; 06b DR-17 … 20, DX-81 |
+| D-48 | **Insights in Milestone 1:** a page like the desk's Insights. For today, yesterday, this or last week, this or last month, the last 30 days or any range, each compared with the period before: what was sold (dispenses, patients served, units, sales value), the top items, sales by day and by prescriber, what was received, stock health (low stock, near expiry, expired, non-moving) and stock value at cost and at MRP. **The consumption, valuation and non-moving reports move from Milestone 2 into Milestone 1** to feed it. | §5; 06a §14, §12.3 (E-46), §19 (PR 12); 06b DR-08, DR-09, DR-21 … 24, DX-82 |
 
 ### Engineer's calls in Rev 6.2 (under D-3; veto any)
 
@@ -300,17 +301,17 @@ After round 5: R4-1 is decided as D-32, R4-2 is widened by D-33, and R4-7 is con
   - FEFO; the expiry block; the MRP ceiling;
   - MR-01 … 05, 08 … 11, 13, 14, 18 (`requires_prescription`), 19 … 22;
   - patient returns; write-offs (expiry, damage); **stock-count corrections**, up or down, including found stock, which may create its batch (D-42); reversals; idempotency.
-- **Views:** stock overview, low stock, near expiry (computed live, no jobs); **the stock statement** (opening + received − issued = balance, per item and period, D-47); the H1 and purchase registers (print view and CSV).
+- **Views:** stock overview, low stock, near expiry (computed live, no jobs); **the stock statement** (opening + received − issued = balance, per item and period, D-47); **Insights** (sales by period with comparisons, top items, by prescriber, stock health, stock value: D-48); the H1 and purchase registers (print view and CSV).
 
 **Later (everything else in Rev 5):**
 
 | Milestone | Contents |
 |---|---|
 | **Pilot go-live** (after Milestone 1 is accepted) | Hosting in its own Railway project; DS-12 (no superuser DSN); the restore drill (06b DMG-10); `PIN_PEPPERS` set; the DPA (OQ-24); counsel's review (OQ-8, OQ-32); OQ-1 |
-| **Milestone 2** | • Phone OTP, once the WhatsApp authentication template and the DLT sender header and template are approved.<br>• Backdating, including a GRN's `received_at`, and the entry-lag report.<br>• Manual opening balances (outside an import); supplier returns.<br>• The patient merge tool.<br>• Procedure use with `CONSUMABLES_ONLY` and procedure types; opened containers (P1-C, if OQ-1 confirms).<br>• GST tax rates.<br>• The outbox, daily and weekly jobs, reconciliation, purges.<br>• Master corrections.<br>• Valuation, consumption and non-moving reports.<br>• XLSX import. |
+| **Milestone 2** | • Phone OTP, once the WhatsApp authentication template and the DLT sender header and template are approved.<br>• Backdating, including a GRN's `received_at`, and the entry-lag report.<br>• Manual opening balances (outside an import); supplier returns.<br>• The patient merge tool.<br>• Procedure use with `CONSUMABLES_ONLY` and procedure types; opened containers (P1-C, if OQ-1 confirms).<br>• GST tax rates.<br>• The outbox, daily and weekly jobs, reconciliation, purges.<br>• Master corrections.<br>• XLSX import. |
 | **Milestone 3** | `LICENSED_PHARMACY`; same-state transfers (D-19); stock takes and purchase orders; consumption templates; per-premises reorder levels; a server PDF for registers; WhatsApp refill reminders (after opt-in and opt-out, C-14); object storage at 10 GB (D-35); temperature logging; Ritu Desk integration if OQ-30 says yes |
 
-**How Milestone 1 is built:** 13 small PRs (06a §19). Each is on its own branch, based on the previous one, and each passes the full suite before the next starts. Reviews (D-44): PR 1 and PR 2 approved; then every three PRs (PRs 3–5 next).
+**How Milestone 1 is built:** 14 small PRs (06a §19). Each is on its own branch, based on the previous one, and each passes the full suite before the next starts. Reviews (D-44): PR 1 and PR 2 approved; then every three PRs (PRs 3–5 next).
 
 ### Go-live gates, for the first premises
 
