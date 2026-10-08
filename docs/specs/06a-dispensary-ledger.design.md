@@ -1,11 +1,15 @@
 # Spec 06a — Clinic Pharmacy Tool: Design
 
-**Status:** **Rev 6.1 (standalone)**, 2026-10-08. **Milestone 1 is being built** (§19); everything else stays design.
+**Status:** **Rev 6.2 (standalone)**, 2026-10-08. **Milestone 1 is being built** (§19); everything else stays design.
 **Written against:** clinic-pharmacy-tool `origin/main` @ `6f5ffb2` (fetched 2026-10-08; README only). Stack conventions from Ritu Desk `origin/main` @ `8bee594` (fetched 2026-10-08; no newer commits).
 **History:** Revisions 4–6 were squashed into one commit when this repo's history was cleaned on 2026-10-08; the revision notes say what each changed. Earlier drafts, from when this was planned as a Ritu Desk module, are kept privately. Rev 4 replaced those drafts (D-24).
 
 **Type:** design spec (architecture, identity, data model, invariants, operations, API)
 **Index, decisions, open questions:** [06](06-dispensary-ledger.md) · **Acceptance gate:** [06b](06b-dispensary-ledger.acceptance.md)
+
+**Rev 6.2 changes (founder review of PR 2, D-45, D-46):**
+- Failed sign-ins are counted **per submitted username**, whether or not the account exists; after 5 failures the answer is 429 `too_many_attempts` for both (§3.3, §3.8). The counter moves to a new table, `sign_in_throttle`, holding only an HMAC of the login (§6.1, R6-10).
+- Migration 012 is `sign_in_throttle` (PR 3); the later migrations move up by one (§18, §19).
 
 **Rev 6.1 changes (founder round 7, D-42 … D-44):**
 - Stock-count corrections, including found stock, are Milestone 1; the dispensing PR is split in two (§19: PR 9 dispensing, PR 10 returns, write-offs, count corrections, reversals). Milestone 1 is now 13 PRs.
@@ -326,7 +330,7 @@ If any check fails, every `/api/*` route except `GET /api/health` returns **503 
 ### 3.3 Full sign-in
 
 Either method creates a session (§3.4). **Milestone 1 ships password sign-in only** (D-39); phone OTP is Milestone 2, once its templates are approved.
-- **Password:** `{login, password}`. An unknown login runs a dummy scrypt verify and gets the same 401 `invalid_credentials` in the same time.
+- **Password:** `{login, password}`. An unknown login runs a dummy scrypt verify and gets the same 401 `invalid_credentials` in the same time. It also counts toward the same per-username limit as a real one (§3.8, D-45), so its 5th failure gets the same 429.
 - **Phone OTP** (§3.9): `{phone}` → code → session.
 
 **Rules:**
@@ -448,8 +452,8 @@ Either method creates a session (§3.4). **Milestone 1 ships password sign-in on
 | What | Rule | Kept in |
 |---|---|---|
 | Sign-in failures per IP | 20 per 15 min (a clinic's staff share one NAT address) → 429 `too_many_attempts` with `Retry-After` | memory (one replica; moved to the DB before a second) |
-| Password failures per account, from an **untrusted** browser | The try is counted **before** the password is checked, so a burst checks at most 5. The 5th failure pauses password sign-in for that account for 15 min.<br>• A paused account answers exactly like a wrong password.<br>• **A pause never ends a live session.**<br>• OTP sign-in still works. | DB (`staff_users`) |
-| Password failures on a **trusted device** | 5 per account per device per 15 min. After that, the device counts as untrusted for that account. | memory |
+| Password failures **per submitted username** (D-45), from an **untrusted** browser | Counted for every username tried, **whether or not the account exists**:<br>• the try is counted **before** the password is checked, so a burst checks at most 5;<br>• failures count within 15 minutes of the first; a successful sign-in clears the count;<br>• **the 5th failure starts a 15-minute pause.** That answer, and every try during the pause (even with the right password), is **429 `too_many_attempts`** with `Retry-After` and the message "Too many attempts. Try again in 15 minutes." It is identical for an existing and a non-existing username;<br>• **a pause never ends a live session;**<br>• OTP sign-in still works (Milestone 2). | DB (`sign_in_throttle`, keyed by an HMAC of the login, R6-10) |
+| Password failures on a **trusted device** | 5 per submitted username per device per 15 min do not count toward the limit above. After that, the device counts as untrusted for that username (R6-13). | memory |
 | Switch PIN | **Per user, across all devices:** 5 wrong in 15 min disables PIN switching for that person (`switch_pin_blocked`) until their next full sign-in. Other people are unaffected, and no session ends. | DB (`staff_users`) |
 | Signing PIN or password re-auth | per session: the 5th wrong secret ends that session | DB (`sessions.secret_failures`) |
 | OTP | 6 digits; 5-min TTL; 3 tries per code; 5 codes per phone per hour; 20 per IP per 15 min. A rate-limited phone looks the same as any other. | DB and memory |
@@ -693,7 +697,7 @@ Everything is **Phase 1** unless marked. **P1-C** means Phase 1 *conditional* on
 | `password_hash` | TEXT NULL | CHECK the scrypt shape `^scrypt\$15\$8\$1\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+$`. CHECK (`password_hash IS NOT NULL OR phone_e164 IS NOT NULL`). |
 | `must_change_password` | BOOLEAN NOT NULL DEFAULT false | |
 | `switch_pin_hash`, `signing_pin_hash` | TEXT NULL | CHECK the peppered shape `^scrypt\$15\$8\$1\$p[0-9]{1,3}\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+$` (§3.12). `signing_pin_hash` is NULL unless the role holds a PIN-gated permission (§3.7). |
-| `password_failures`, `password_paused_until` | INTEGER, TIMESTAMPTZ | the untrusted-browser counter (§3.8) |
+| `password_failures`, `password_paused_until` | INTEGER, TIMESTAMPTZ | **unused since Rev 6.2:** the counter moved to `sign_in_throttle` (D-45). Kept because migrations never drop a column (R6-8, R6-11). |
 | `switch_pin_failures`, `switch_pin_window_from`, `switch_pin_blocked` | INTEGER, TIMESTAMPTZ, BOOLEAN | the per-user switch-PIN limit (§3.8) |
 | `active` | BOOLEAN NOT NULL DEFAULT true | |
 | `last_sign_in_at` | TIMESTAMPTZ NULL | |
@@ -738,6 +742,18 @@ Everything is **Phase 1** unless marked. **P1-C** means Phase 1 *conditional* on
 Purged after one day.
 
 **`reauth_grants`**: `session_id`, `staff_user_id` (composite FKs), `purpose` (CHECK in the §3.7 list), `entity_id`, `expires_at` (CHECK `<= created_at + interval '10 minutes'`), `used_at`.
+
+**`sign_in_throttle`** (§3.8, D-45): one row per username tried in the organisation, existing or not.
+
+| Column | Notes |
+|---|---|
+| `login_hmac` | HMAC-SHA256 of the normalised (trimmed, lower-case) login under a key derived from `SESSION_SECRET`, base64url; CHECK `^[A-Za-z0-9_-]{43}$`; UNIQUE (`org_id`, `login_hmac`). Never the login in clear (R6-10). |
+| `failures` | INTEGER NOT NULL DEFAULT 0; CHECK 0–5 |
+| `window_from` | TIMESTAMPTZ NULL: the first failure in the current window |
+| `paused_until` | TIMESTAMPTZ NULL |
+| `updated_at` | |
+
+The app role has SELECT, INSERT and UPDATE. A row is not linked to `staff_users`, so it reveals nothing about which usernames exist. Rotating `SESSION_SECRET` resets every count. Rows untouched for a day are purged by the jobs service (Milestone 2).
 
 **`audit_log`** (§3.11)
 
@@ -2008,24 +2024,25 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 | 009 | `device_state` | 2 |
 | 010 | `audit_log` (+ append-only trigger) | 2 |
 | 011 | `reauth_grants` | 3 |
-| 012 | `medicine_master`; `GRANT SELECT` to the app role (the seed is data, loaded by `pharmacy_curator`, R6-5) | 5 |
-| 013 | `stock_settings` + history | 5 |
-| 014 | `premises_settings` + history | 5 |
-| 015 | `stock_locations` | 5 |
-| 016 | `items`, `item_units` (+ freeze and immutability triggers); includes the nullable multi-dose columns | 5 |
-| 017 | `suppliers` | 5 |
-| 018 | `patients` | 6 |
-| 019 | `prescriptions`, `prescription_lines` (+ immutability triggers) | 6 |
-| 020 | `prescription_images` | 6 |
-| 021 | `batches` (per premises) | 7 |
-| 022 | `stock_movements` + `stock_balances` + the validate / apply / as-of / append-only triggers. The ledger and its cache are one logical change: the cache is defined by the trigger. | 7 |
-| 023 | `idempotency_keys` | 7 |
-| 024 | `goods_receipts` (+ lines; posted-immutability trigger) | 8 |
-| 025 | `dispenses` (+ lines, allocations, the L-25 trigger); includes the nullable `LICENSED_PHARMACY` and backdate columns (R6-9) | 9 |
-| 026 | `patient_returns` (+ lines) | 10 |
-| 027 | `stock_adjustments` (+ lines: write-offs, stock-count corrections incl. found stock; `opened_container_id` nullable, its FK added in Milestone 2) | 10 |
-| 028 | `stock_reversals` | 10 |
-| 029 | `stock_imports`, `stock_import_rows` | 12 |
+| 012 | `sign_in_throttle` (D-45) | 3 |
+| 013 | `medicine_master`; `GRANT SELECT` to the app role (the seed is data, loaded by `pharmacy_curator`, R6-5) | 5 |
+| 014 | `stock_settings` + history | 5 |
+| 015 | `premises_settings` + history | 5 |
+| 016 | `stock_locations` | 5 |
+| 017 | `items`, `item_units` (+ freeze and immutability triggers); includes the nullable multi-dose columns | 5 |
+| 018 | `suppliers` | 5 |
+| 019 | `patients` | 6 |
+| 020 | `prescriptions`, `prescription_lines` (+ immutability triggers) | 6 |
+| 021 | `prescription_images` | 6 |
+| 022 | `batches` (per premises) | 7 |
+| 023 | `stock_movements` + `stock_balances` + the validate / apply / as-of / append-only triggers. The ledger and its cache are one logical change: the cache is defined by the trigger. | 7 |
+| 024 | `idempotency_keys` | 7 |
+| 025 | `goods_receipts` (+ lines; posted-immutability trigger) | 8 |
+| 026 | `dispenses` (+ lines, allocations, the L-25 trigger); includes the nullable `LICENSED_PHARMACY` and backdate columns (R6-9) | 9 |
+| 027 | `patient_returns` (+ lines) | 10 |
+| 028 | `stock_adjustments` (+ lines: write-offs, stock-count corrections incl. found stock; `opened_container_id` nullable, its FK added in Milestone 2) | 10 |
+| 029 | `stock_reversals` | 10 |
+| 030 | `stock_imports`, `stock_import_rows` | 12 |
 
 **Milestone 2, numbered when built:** `otp_challenges`, `item_tax_rates`, `procedure_types`, `patient_merges` (+ the `patient_canonical` view), `opened_containers` (+ the FK on `stock_adjustment_lines`), `procedure_uses`, `supplier_returns`, `outbox_events`, `ledger_reconciliation_runs`, `master_correction_requests` (+ the `curation_*` policies).
 
@@ -2049,16 +2066,16 @@ P × n  ≤  M × f        (integer cross-multiplication; stays < 2^53 for any r
 |---|---|---|---|
 | **1** | **Foundation:**<br>• the Next.js 14 scaffold;<br>• `lib/db` (pool, `withTenant`, the int8 parser);<br>• the migration runner, which fails the deploy on any error and checks checksums;<br>• `ops/bootstrap-roles.sql`;<br>• the self-check and the 503 gate; `GET /api/health`;<br>• the real-Postgres harness;<br>• the catalog, isolation and route-inventory checks. | 001 | DS-01 … 10, 13 … 15, 17 … 21; DMG-01 … 05, 07 … 09, 12 … 14; DH-05, 07, 12; DX-76 |
 | **2** | **Staff identity:** org settings, roles and grants, prescribers (table), staff and memberships, devices and sessions (tables), password sign-in (A-01 … A-02, A-06, A-07, A-13, A-16), the guard, the founder CLI, the audit log; the sign-in screen | 002–010 | DN (password rows), DAU, DS/DMG for the new tables, DX-01 … 04 |
-| **3** | **The shared PC:** trusted devices, "Who's working?", the idle lock, the switch PIN, the signing PIN with the pepper, re-auth grants (A-08 … A-12, A-14, A-15) | 011 | DW, DPN-01 … 11, 13 … 17, DX-05 … 08 |
+| **3** | **The shared PC:** trusted devices, "Who's working?", the idle lock, the switch PIN, the signing PIN with the pepper, re-auth grants (A-08 … A-12, A-14, A-15); **the per-username sign-in limit (D-45)** | 011–012 | DW, DPN-01 … 11, 13 … 17, DN-02 … 05, 22, 23 (D-45), DX-05 … 08 |
 | **4** | **Administration:** premises, staff, roles, devices, the audit view (M-01 … M-12) and their screens; the UI kit copied in | — | DI (administration rows), DX-09 … 19 |
-| **5** | **Catalogue and settings:** the minimal master, stock and premises settings, locations, items and units, suppliers (E-01 … E-09, E-12 … E-18, E-20, E-21) | 012–017 | DG-01 … 03, 05 … 11; DX-33 … 37, 39 … 43, 45 |
-| **6** | **People:** patients, prescribers, prescriptions (manual and photo) (P-01 … P-13) | 018–020 | DRX-01 … 16; DX-20 … 31 |
-| **7** | **Ledger:** batches, movements, balances, triggers, idempotency | 021–023 | DL (M1 rows), DP-01 … 08, 10, 12; DA; DK-01 … 03 |
-| **8** | **Receiving stock** (E-23 … E-26) | 024 | DO-01 … 04; DM-04 … 06; DX-46 … 49 |
-| **9** | **Dispensing:** allocation (FEFO), preview and dispense, the M1 mode rules, `requires_prescription` (E-27 … E-30) | 025 | DE (dispensing rows), DU (except DU-17), DK, DM (M1 rules), DO (dispense rows), DC-01 … 04, 10, 11; DX-50 … 58 |
-| **10** | **Returns and corrections:** patient returns, write-offs, **stock-count corrections incl. found stock** (D-42), reversals (E-32, E-34, E-35) | 026–028 | DE-10 … 16, 20; DO (return, reversal and adjustment rows); DC-05 … 07; DPN-13; DX-60, 62, 63 |
+| **5** | **Catalogue and settings:** the minimal master, stock and premises settings, locations, items and units, suppliers (E-01 … E-09, E-12 … E-18, E-20, E-21) | 013–018 | DG-01 … 03, 05 … 11; DX-33 … 37, 39 … 43, 45 |
+| **6** | **People:** patients, prescribers, prescriptions (manual and photo) (P-01 … P-13) | 019–021 | DRX-01 … 16; DX-20 … 31 |
+| **7** | **Ledger:** batches, movements, balances, triggers, idempotency | 022–024 | DL (M1 rows), DP-01 … 08, 10, 12; DA; DK-01 … 03 |
+| **8** | **Receiving stock** (E-23 … E-26) | 025 | DO-01 … 04; DM-04 … 06; DX-46 … 49 |
+| **9** | **Dispensing:** allocation (FEFO), preview and dispense, the M1 mode rules, `requires_prescription` (E-27 … E-30) | 026 | DE (dispensing rows), DU (except DU-17), DK, DM (M1 rules), DO (dispense rows), DC-01 … 04, 10, 11; DX-50 … 58 |
+| **10** | **Returns and corrections:** patient returns, write-offs, **stock-count corrections incl. found stock** (D-42), reversals (E-32, E-34, E-35) | 027–029 | DE-10 … 16, 20; DO (return, reversal and adjustment rows); DC-05 … 07; DPN-13; DX-60, 62, 63 |
 | **11** | **Views and registers:** stock overview, low stock, near expiry; the H1 and purchase registers, print and CSV (E-38 … E-40) | — | DR (M1 rows); DX-65 … 68 |
-| **12** | **CSV import of opening stock** (E-41 … E-44) | 029 | DIM (CSV rows); DX-69 … 72 |
+| **12** | **CSV import of opening stock** (E-41 … E-44) | 030 | DIM (CSV rows); DX-69 … 72 |
 | **13** | **Pilot readiness:** the stock screens finished; an end-to-end "day at one premises" test; a demo seed script | — | the Milestone 1 gate (06b §30) |
 
 Each PR follows the same order: migrations → queries/service → tests → routes → UI.

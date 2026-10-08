@@ -1,6 +1,6 @@
 # Spec 06b — Clinic Pharmacy Tool: Acceptance Gate
 
-**Status:** **Rev 6.1 (standalone)**, 2026-10-08. Self-contained. Revisions 4–6 were squashed when the history was cleaned (2026-10-08). §30 lists which rows gate Milestone 1.
+**Status:** **Rev 6.2 (standalone)**, 2026-10-08. Self-contained. Revisions 4–6 were squashed when the history was cleaned (2026-10-08). §30 lists which rows gate Milestone 1.
 **Written against:** clinic-pharmacy-tool `origin/main` @ `6f5ffb2` (fetched 2026-10-08; README only). Stack conventions from Ritu Desk `origin/main` @ `8bee594` (fetched 2026-10-08).
 **Type:** acceptance spec (a test set, not a behaviour doc), in the style of Spec 01.
 **Defines "done" for:** [06a](06a-dispensary-ledger.design.md) Phase 1 · **Index and decisions:** [06](06-dispensary-ledger.md)
@@ -214,7 +214,7 @@ DX-76 fails the build if any route lacks a row here.
 |---|---|---|---|
 | **Sign-in and session** | | | |
 | DX-01 | A-01 `GET /auth/context` | `?org=org-b`; and DEV_B_GJ's device cookie re-signed with a wrong key | B's display name only, never an id; the forged cookie is ignored (context = no device) |
-| DX-02 | A-02 sign-in on DEV_A_GJ with BA's login and password | — | 401 `invalid_credentials`, identical in body and timing class to an unknown login; BA's counters unchanged |
+| DX-02 | A-02 sign-in on DEV_A_GJ with BA's login and password | — | 401 `invalid_credentials`, identical in body and timing class to an unknown login; no `sign_in_throttle` row of B's is created or changed |
 | DX-03 | A-03 / A-04 / A-05 OTP on DEV_A_GJ with BA's phone | — | 202 like any number; `fakeOtpChannel` records no send to BA; verify never succeeds |
 | DX-04 | A-06, A-07, A-08, A-09, A-13 … A-16 (self-only) | a body naming another user or session | 422 (unknown key); responses carry only the caller's organisation |
 | DX-05 | A-10 lock-screen list on DEV_A_GJ while BA is signed in on DEV_B_GJ | — | only A's sessions on DEV_A_GJ |
@@ -336,8 +336,8 @@ DX-76 fails the build if any route lacks a row here.
 | ID | Scenario | Expected |
 |---|---|---|
 | DN-01 | AF signs in with the right password on DEV_A_GJ | a session with `device_id = DEV_A_GJ`; the `pharm_session` cookie is httpOnly, `secure` and `sameSite=lax`; `auth.sign_in_succeeded {method: password}` is audited in the same transaction |
-| DN-02 | an unknown login | 401 `invalid_credentials`; one dummy scrypt verify (asserted by call count); the typed login appears in no log or audit row |
-| DN-03 | 5 wrong passwords for AF from UNTRUSTED; then the right password; then OTP | the 5th pauses password sign-in for 15 min. During the pause, the right password → 401 `invalid_credentials` (no oracle); AF's existing sessions keep working; OTP sign-in succeeds. |
+| DN-02 | an unknown login | 401 `invalid_credentials`; one dummy scrypt verify (asserted by call count); the typed login appears in no log, audit row or `sign_in_throttle` row (which holds only its HMAC) |
+| DN-03 | 5 wrong passwords for AF from UNTRUSTED; then the right password; then OTP | the 1st–4th → 401 `invalid_credentials`. **The 5th → 429 `too_many_attempts`** with `Retry-After` (≈ 900 s) and starts a 15-min pause (D-45). During the pause, the right password → the same 429. AF's existing sessions keep working. After 15 min the right password signs in. OTP sign-in succeeds (Milestone 2). |
 | DN-04 | 30 parallel wrong passwords for AF from UNTRUSTED | at most 5 password checks run (try taken before check) |
 | DN-05 | 5 wrong passwords for AF on DEV_A_GJ, then a 6th | the account is not paused by the first 5; from the 6th, that device counts as untrusted for AF (the attempt counts toward the account pause) |
 | DN-06 | the 21st failed sign-in from one IP within 15 min | 429 `too_many_attempts` with `Retry-After` |
@@ -355,6 +355,8 @@ DX-76 fails the build if any route lacks a row here.
 | DN-18 | AA is the only active owner: deactivate or demote AA | 409 `last_owner` |
 | DN-19 | UNTRUSTED with `untrusted_idle_minutes` NULL: no input for 5 h. Then the setting is 30: no input for 31 min. | still signed in; then 401 `session_idle` and revoked (`idle`) |
 | DN-20 | a `SUSPENDED` organisation | sign-in → 401 `invalid_credentials`; live sessions → 401 `session_revoked` on the next request |
+| DN-22 | **D-45, a username that does not exist:** 5 wrong tries for `ghost` (no such account) from UNTRUSTED, then a 6th | the 1st–4th → 401 `invalid_credentials`; the 5th and 6th → 429 `too_many_attempts`. Status, body (apart from `requestId`) and `Retry-After` are **identical** to DN-03's for AF, compared side by side. After 15 min → 401 again. |
+| DN-23 | **D-45 window and reset:** 4 wrong tries, then a 5th 16 min after the first; separately, 4 wrong tries, the right password, then 4 wrong tries | no pause in either case: the window restarted, and a success clears the count |
 | DN-21 | the founder CLI creates org C | the organisation, its first premises, its built-in roles and an owner with `must_change_password`; the one-time password is printed once; `org.created` and `staff.owner_bootstrapped` are audited |
 
 ---
