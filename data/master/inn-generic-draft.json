@@ -1,0 +1,152 @@
+[
+  {
+    "source_ref": "inn-0001",
+    "brand_name": "Paracetamol 500 mg tablet",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "TABLET",
+    "strength_text": "500 mg",
+    "suggested_base_unit": "TABLET",
+    "salts": [
+      {
+        "name": "Paracetamol",
+        "strength": "500 mg"
+      }
+    ],
+    "requires_prescription": false
+  },
+  {
+    "source_ref": "inn-0002",
+    "brand_name": "Azithromycin 500 mg tablet",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "TABLET",
+    "strength_text": "500 mg",
+    "suggested_base_unit": "TABLET",
+    "salts": [
+      {
+        "name": "Azithromycin",
+        "strength": "500 mg"
+      }
+    ],
+    "requires_prescription": false
+  },
+  {
+    "source_ref": "inn-0003",
+    "brand_name": "Doxycycline 100 mg capsule",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "CAPSULE",
+    "strength_text": "100 mg",
+    "suggested_base_unit": "CAPSULE",
+    "salts": [
+      {
+        "name": "Doxycycline",
+        "strength": "100 mg"
+      }
+    ],
+    "requires_prescription": false
+  },
+  {
+    "source_ref": "inn-0004",
+    "brand_name": "Amoxicillin 500 mg capsule",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "CAPSULE",
+    "strength_text": "500 mg",
+    "suggested_base_unit": "CAPSULE",
+    "salts": [
+      {
+        "name": "Amoxicillin",
+        "strength": "500 mg"
+      }
+    ],
+    "requires_prescription": false
+  },
+  {
+    "source_ref": "inn-0005",
+    "brand_name": "Cetirizine 10 mg tablet",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "TABLET",
+    "strength_text": "10 mg",
+    "suggested_base_unit": "TABLET",
+    "salts": [
+      {
+        "name": "Cetirizine",
+        "strength": "10 mg"
+      }
+    ],
+    "requires_prescription": false
+  },
+  {
+    "source_ref": "inn-0006",
+    "brand_name": "Fluconazole 150 mg tablet",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "TABLET",
+    "strength_text": "150 mg",
+    "suggested_base_unit": "TABLET",
+    "salts": [
+      {
+        "name": "Fluconazole",
+        "strength": "150 mg"
+      }
+    ],
+    "requires_prescription": false
+  },
+  {
+    "source_ref": "inn-0007",
+    "brand_name": "Hydroxychloroquine 200 mg tablet",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "TABLET",
+    "strength_text": "200 mg",
+    "suggested_base_unit": "TABLET",
+    "salts": [
+      {
+        "name": "Hydroxychloroquine",
+        "strength": "200 mg"
+      }
+    ],
+    "requires_prescription": false
+  },
+  {
+    "source_ref": "inn-0008",
+    "brand_name": "Clotrimazole 1% cream",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "CREAM",
+    "strength_text": "1% w/w",
+    "suggested_base_unit": "G",
+    "salts": [
+      {
+        "name": "Clotrimazole",
+        "strength": "1% w/w"
+      }
+    ],
+    "requires_prescription": false
+  },
+  {
+    "source_ref": "inn-0009",
+    "brand_name": "Permethrin 5% cream",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "CREAM",
+    "strength_text": "5% w/w",
+    "suggested_base_unit": "G",
+    "salts": [
+      {
+        "name": "Permethrin",
+        "strength": "5% w/w"
+      }
+    ],
+    "requires_prescription": false
+  },
+  {
+    "source_ref": "inn-0010",
+    "brand_name": "Calamine lotion",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "LOTION",
+    "strength_text": null,
+    "suggested_base_unit": "ML",
+    "salts": [
+      {
+        "name": "Calamine",
+        "strength": null
+      }
+    ],
+    "requires_prescription": false
+  }
+]

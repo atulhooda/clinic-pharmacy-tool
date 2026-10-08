@@ -5,7 +5,7 @@ A standalone, multi-tenant pharmacy and stock app for clinics. The design is **S
 - [06a](docs/specs/06a-dispensary-ledger.design.md): the design;
 - [06b](docs/specs/06b-dispensary-ledger.acceptance.md): the acceptance tests.
 
-**Status:** Milestone 1, PR 4 (administration: organisation settings, premises, staff, roles and grants, the audit log, and the UI kit copied from Ritu Desk). No stock screens yet.
+**Status:** Milestone 1, PR 5 (the catalogue: the minimal medicine master, dispensary and premises settings, locations, items and pack units, suppliers). No stock movements yet: the ledger is PR 7.
 
 ## Requirements
 
@@ -28,7 +28,7 @@ npm test -- rls   # only the test files whose path contains "rls"
    createdb pharmacy
    psql -d pharmacy -f ops/bootstrap-roles.sql
    psql -d pharmacy -c "ALTER ROLE pharmacy_migrator PASSWORD '…'" -c "ALTER ROLE pharmacy_app PASSWORD '…'" \
-                    -c "ALTER ROLE pharmacy_ops PASSWORD '…'"
+                    -c "ALTER ROLE pharmacy_ops PASSWORD '…'" -c "ALTER ROLE pharmacy_curator PASSWORD '…'"
    ```
 2. **Configure.** Copy `.env.example` to `.env.local`, fill in the URLs, a `SESSION_SECRET` and `PIN_PEPPERS`, and export them in your shell.
 3. **Migrate and start:**
@@ -43,6 +43,11 @@ npm test -- rls   # only the test files whose path contains "rls"
      --premises-name Main --address "1 Road, City" --state-code 24 --owner-name "Owner Name" --owner-login owner
    ```
    Then open `localhost:3000/my-clinic/sign-in`. The first sign-in goes straight to the password change.
+5. **Load the medicine master** (once per database, and after the seed in `data/master/` changes). It runs as `pharmacy_curator`; see `data/master/SOURCES.md` for what the seed is and is not:
+   ```sh
+   CURATOR_DATABASE_URL=… node scripts/load-master.cjs
+   ```
+   Then **Stock → Dispensary setup** sets up the dispensary and each premises' dispensing mode.
 
 **Settings** (`/settings`): the owner manages the organisation's security settings, premises, staff (a new person gets a one-time password, shown once), roles and grant overrides, trusted PCs and the audit log. Every change that matters asks for the owner's signing PIN.
 

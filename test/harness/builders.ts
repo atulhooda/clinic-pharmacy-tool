@@ -33,6 +33,10 @@ interface World {
   deviceId: string;
   sessionId: string;
   settingsId: string;
+  stockSettingsId: string;
+  premisesSettingsId: string;
+  itemId: string;
+  unitId: string;
 }
 const worlds = new Map<string, World>();
 async function world(org: OrgFixture): Promise<World> {
@@ -44,7 +48,17 @@ async function world(org: OrgFixture): Promise<World> {
   const settingsId = await inOrg(org.orgId, async (c) => (await c.query('SELECT id FROM org_settings')).rows[0].id as string);
   // A role key that exists only in this organisation.
   await inOrg(org.orgId, (c) => c.query("INSERT INTO org_roles (org_id, key, name) VALUES ($1, $2, 'Only here')", [org.orgId, `only_${org.orgId.slice(0, 6)}`]));
-  const w = { staffId: staff.id, prescriberId, deviceId, sessionId, settingsId };
+  const stock = await inOrg(org.orgId, async (c) => {
+    const stockSettingsId = (await c.query('INSERT INTO stock_settings (org_id) VALUES ($1) RETURNING id', [org.orgId])).rows[0].id as string;
+    const premisesSettingsId = (await c.query(`INSERT INTO premises_settings (org_id, premises_id, dispensing_mode) VALUES ($1, $2, 'RMP_OWN_PATIENTS') RETURNING id`,
+      [org.orgId, org.premisesId])).rows[0].id as string;
+    const itemId = (await c.query(`INSERT INTO items (org_id, category, display_name, base_unit, track_batches) VALUES ($1, 'MEDICINE', $2, 'TABLET', true) RETURNING id`,
+      [org.orgId, `World item ${org.orgId.slice(0, 6)}`])).rows[0].id as string;
+    const unitId = (await c.query(`INSERT INTO item_units (org_id, item_id, name, base_units_per_unit) VALUES ($1, $2, 'strip', 10) RETURNING id`,
+      [org.orgId, itemId])).rows[0].id as string;
+    return { stockSettingsId, premisesSettingsId, itemId, unitId };
+  });
+  const w = { staffId: staff.id, prescriberId, deviceId, sessionId, settingsId, ...stock };
   worlds.set(org.orgId, w);
   return w;
 }
@@ -136,6 +150,53 @@ export const FK_BUILDERS: Record<string, FkBuilder> = {
     return inTenant(a, `INSERT INTO reauth_grants (org_id, session_id, staff_user_id, purpose, entity_id, created_at, expires_at)
                         VALUES ($1, $2, $3, 'stock.adjust', $4, now(), now() + interval '2 minutes')`, [a.orgId, wa.sessionId, wb.staffId, a.premisesId]);
   },
+  async stock_settings_updated_by_fk(a, b) {
+    const [, wb] = [await world(a), await world(b)];
+    return inTenant(a, 'UPDATE stock_settings SET updated_by = $2 WHERE org_id = $1', [a.orgId, wb.staffId]);
+  },
+  async stock_settings_history_settings_fk(a, b) {
+    const wb = await world(b);
+    return inTenant(a, `INSERT INTO stock_settings_history (org_id, settings_id, snapshot, version, valid_from) VALUES ($1, $2, '{}', 1, now())`, [a.orgId, wb.stockSettingsId]);
+  },
+  async stock_settings_history_changed_by_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return inTenant(a, `INSERT INTO stock_settings_history (org_id, settings_id, snapshot, version, changed_by, valid_from) VALUES ($1, $2, '{}', 1, $3, now())`,
+      [a.orgId, wa.stockSettingsId, wb.staffId]);
+  },
+  async premises_settings_premises_fk(a, b) {
+    await world(a);
+    return inTenant(a, `INSERT INTO premises_settings (org_id, premises_id, dispensing_mode) VALUES ($1, $2, 'RMP_OWN_PATIENTS')`, [a.orgId, b.premisesId]);
+  },
+  async premises_settings_updated_by_fk(a, b) {
+    const [, wb] = [await world(a), await world(b)];
+    return inTenant(a, 'UPDATE premises_settings SET updated_by = $2 WHERE org_id = $1', [a.orgId, wb.staffId]);
+  },
+  async premises_settings_history_settings_fk(a, b) {
+    const wb = await world(b);
+    return inTenant(a, `INSERT INTO premises_settings_history (org_id, settings_id, premises_id, snapshot, version, valid_from) VALUES ($1, $2, $3, '{}', 1, now())`,
+      [a.orgId, wb.premisesSettingsId, a.premisesId]);
+  },
+  async premises_settings_history_premises_fk(a, b) {
+    const wa = await world(a);
+    return inTenant(a, `INSERT INTO premises_settings_history (org_id, settings_id, premises_id, snapshot, version, valid_from) VALUES ($1, $2, $3, '{}', 1, now())`,
+      [a.orgId, wa.premisesSettingsId, b.premisesId]);
+  },
+  async premises_settings_history_changed_by_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return inTenant(a, `INSERT INTO premises_settings_history (org_id, settings_id, premises_id, snapshot, version, changed_by, valid_from) VALUES ($1, $2, $3, '{}', 1, $4, now())`,
+      [a.orgId, wa.premisesSettingsId, a.premisesId, wb.staffId]);
+  },
+  async stock_locations_premises_fk(a, b) {
+    return inTenant(a, `INSERT INTO stock_locations (org_id, premises_id, name, kind) VALUES ($1, $2, 'Cross', 'STORE')`, [a.orgId, b.premisesId]);
+  },
+  async item_units_item_fk(a, b) {
+    const wb = await world(b);
+    return inTenant(a, `INSERT INTO item_units (org_id, item_id, name, base_units_per_unit) VALUES ($1, $2, 'box', 100)`, [a.orgId, wb.itemId]);
+  },
+  async items_container_unit_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return inTenant(a, 'UPDATE items SET container_unit_id = $3, in_use_hours = 24 WHERE org_id = $1 AND id = $2', [a.orgId, wa.itemId, wb.unitId]);
+  },
   async device_state_session_fk(a, b) {
     const [wa, wb] = [await world(a), await world(b)];
     return inTenant(a, 'INSERT INTO device_state (org_id, device_id, active_session_id) VALUES ($1, $2, $3)', [a.orgId, wa.deviceId, wb.sessionId]);
@@ -193,6 +254,65 @@ export const UNIQUE_BUILDERS: Record<string, UniqueBuilder> = {
   async sign_in_throttle_login_key(a, b) {
     const hmac = 'A'.repeat(43);
     return twice(a, b, (o) => inTenant(o, 'INSERT INTO sign_in_throttle (org_id, login_hmac) VALUES ($1, $2)', [o.orgId, hmac]));
+  },
+  async stock_settings_org_key() {
+    const [a, b] = [await createOrg('ssa'), await createOrg('ssb')];
+    return twice(a, b, (o) => inTenant(o, 'INSERT INTO stock_settings (org_id) VALUES ($1)', [o.orgId]));
+  },
+  async premises_settings_premises_key() {
+    const [a, b] = [await createOrg('psa'), await createOrg('psb')];
+    return twice(a, b, (o) => inTenant(o, `INSERT INTO premises_settings (org_id, premises_id, dispensing_mode) VALUES ($1, $2, 'RMP_OWN_PATIENTS')`, [o.orgId, o.premisesId]));
+  },
+  async stock_locations_premises_key(a, b) {
+    const id = randomUUID();
+    return twice(a, b, (o, v) => inTenant(o, `INSERT INTO stock_locations (org_id, id, premises_id, name, kind) VALUES ($1, $2, $3, $4, 'STORE')`,
+      [o.orgId, id, o.premisesId, v === 'again' ? 'Second shelf' : 'First shelf']));
+  },
+  async stock_locations_name_key(a, b) {
+    return twice(a, b, (o, v) => inTenant(o, `INSERT INTO stock_locations (org_id, premises_id, name, kind) VALUES ($1, $2, $3, 'STORE')`,
+      [o.orgId, o.premisesId, v === 'again' ? 'back room' : 'Back Room']));
+  },
+  async stock_locations_default_key() {
+    const [a, b] = [await createOrg('lda'), await createOrg('ldb')];
+    return twice(a, b, (o, v) => inTenant(o, `INSERT INTO stock_locations (org_id, premises_id, name, kind, is_default) VALUES ($1, $2, $3, 'STORE', true)`,
+      [o.orgId, o.premisesId, v === 'again' ? 'Store 2' : 'Store']));
+  },
+  async stock_locations_quarantine_key() {
+    const [a, b] = [await createOrg('lqa'), await createOrg('lqb')];
+    return twice(a, b, (o, v) => inTenant(o, `INSERT INTO stock_locations (org_id, premises_id, name, kind) VALUES ($1, $2, $3, 'QUARANTINE')`,
+      [o.orgId, o.premisesId, v === 'again' ? 'Quarantine 2' : 'Quarantine']));
+  },
+  async items_display_name_key(a, b) {
+    return twice(a, b, (o, v) => inTenant(o, `INSERT INTO items (org_id, category, display_name, base_unit, track_batches) VALUES ($1, 'MEDICINE', $2, 'TABLET', true)`,
+      [o.orgId, v === 'again' ? 'same item' : 'Same Item']));
+  },
+  async items_master_key(a, b) {
+    const master = await inOrg(a.orgId, async (c) => (await c.query('SELECT id FROM medicine_master WHERE NOT requires_prescription ORDER BY id LIMIT 1')).rows[0].id as string);
+    return twice(a, b, (o, v) => inTenant(o, `INSERT INTO items (org_id, master_id, category, display_name, base_unit, track_batches) VALUES ($1, $2, 'MEDICINE', $3, 'TABLET', true)`,
+      [o.orgId, master, v === 'again' ? 'Linked again' : 'Linked']));
+  },
+  async item_units_item_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    const id = randomUUID();
+    return twice(a, b, (o, v) => inTenant(o, `INSERT INTO item_units (org_id, id, item_id, name, base_units_per_unit) VALUES ($1, $2, $3, $4, 5)`,
+      [o.orgId, id, o === a ? wa.itemId : wb.itemId, v === 'again' ? 'pack b' : 'pack a']));
+  },
+  async item_units_name_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return twice(a, b, (o, v) => inTenant(o, `INSERT INTO item_units (org_id, item_id, name, base_units_per_unit) VALUES ($1, $2, $3, 30)`,
+      [o.orgId, o === a ? wa.itemId : wb.itemId, v === 'again' ? 'JAR' : 'jar']));
+  },
+  async item_units_base_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return twice(a, b, (o, v) => inTenant(o, `INSERT INTO item_units (org_id, item_id, name, base_units_per_unit, is_base) VALUES ($1, $2, $3, 1, true)`,
+      [o.orgId, o === a ? wa.itemId : wb.itemId, v === 'again' ? 'tab' : 'tablet']));
+  },
+  async suppliers_name_key(a, b) {
+    return twice(a, b, (o, v) => inTenant(o, 'INSERT INTO suppliers (org_id, name) VALUES ($1, $2)', [o.orgId, v === 'again' ? 'same supplier' : 'Same Supplier']));
+  },
+  async suppliers_gstin_key(a, b) {
+    return twice(a, b, (o, v) => inTenant(o, 'INSERT INTO suppliers (org_id, name, gstin) VALUES ($1, $2, $3)',
+      [o.orgId, v === 'again' ? 'Gstin Two' : 'Gstin One', '24AAAAA0000A1Z5']));
   },
   async device_state_device_key(a, b) {
     const [wa, wb] = [await world(a), await world(b)];

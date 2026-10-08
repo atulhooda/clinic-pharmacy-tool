@@ -2,6 +2,7 @@
 // npm test: start real Postgres, prepare the test database with the real bootstrap and
 // runner, run every test/**/*.test.ts with node:test (through tsx), then clean up.
 import { spawn } from 'child_process';
+import { createRequire } from 'module';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -29,6 +30,8 @@ const server = await startServer();
 let code = 1;
 try {
   const main = await prepareDatabase(server.url, `${prefix}main`, { password });
+  // The reviewed medicine_master seed, loaded as production loads it: by the curator role.
+  await createRequire(import.meta.url)('./load-master.cjs').load(main.urls.curator);
   const files = testFiles(path.join(ROOT, 'test')).filter((f) => filter.length === 0 || filter.some((x) => f.includes(x)));
   code = await new Promise((resolve) => {
     const child = spawn(process.execPath, ['--import', 'tsx', '--test', '--test-concurrency=1', ...files], {

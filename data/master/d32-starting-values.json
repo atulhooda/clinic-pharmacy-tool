@@ -1,0 +1,77 @@
+[
+  {
+    "source_ref": "d32-0001",
+    "brand_name": "Isotretinoin 10 mg capsule",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "CAPSULE",
+    "strength_text": "10 mg",
+    "suggested_base_unit": "CAPSULE",
+    "salts": [
+      {
+        "name": "Isotretinoin",
+        "strength": "10 mg"
+      }
+    ],
+    "requires_prescription": true
+  },
+  {
+    "source_ref": "d32-0002",
+    "brand_name": "Isotretinoin 20 mg capsule",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "CAPSULE",
+    "strength_text": "20 mg",
+    "suggested_base_unit": "CAPSULE",
+    "salts": [
+      {
+        "name": "Isotretinoin",
+        "strength": "20 mg"
+      }
+    ],
+    "requires_prescription": true
+  },
+  {
+    "source_ref": "d32-0003",
+    "brand_name": "Isotretinoin 0.05% gel",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "GEL",
+    "strength_text": "0.05% w/w",
+    "suggested_base_unit": "G",
+    "salts": [
+      {
+        "name": "Isotretinoin",
+        "strength": "0.05% w/w"
+      }
+    ],
+    "requires_prescription": false
+  },
+  {
+    "source_ref": "d32-0004",
+    "brand_name": "Acitretin 10 mg capsule",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "CAPSULE",
+    "strength_text": "10 mg",
+    "suggested_base_unit": "CAPSULE",
+    "salts": [
+      {
+        "name": "Acitretin",
+        "strength": "10 mg"
+      }
+    ],
+    "requires_prescription": true
+  },
+  {
+    "source_ref": "d32-0005",
+    "brand_name": "Acitretin 25 mg capsule",
+    "manufacturer_name": "Generic (any manufacturer)",
+    "dosage_form": "CAPSULE",
+    "strength_text": "25 mg",
+    "suggested_base_unit": "CAPSULE",
+    "salts": [
+      {
+        "name": "Acitretin",
+        "strength": "25 mg"
+      }
+    ],
+    "requires_prescription": true
+  }
+]

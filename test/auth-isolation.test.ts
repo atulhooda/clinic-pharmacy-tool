@@ -35,6 +35,20 @@ import { POST as staffRevoke } from '../app/api/staff/[id]/sessions/revoke/route
 import { GET as rolesGet, POST as rolesPost } from '../app/api/roles/route';
 import { PATCH as rolePatch } from '../app/api/roles/[key]/route';
 import { GET as auditGet } from '../app/api/audit/route';
+import { GET as dSettingsGet, PUT as dSettingsPut } from '../app/api/dispensary/settings/route';
+import { POST as dSetup } from '../app/api/dispensary/setup/route';
+import { GET as dPremises } from '../app/api/dispensary/premises/route';
+import { POST as dPremisesSetup } from '../app/api/dispensary/premises/[id]/setup/route';
+import { PUT as dPremisesSettings } from '../app/api/dispensary/premises/[id]/settings/route';
+import { PATCH as dLocation } from '../app/api/dispensary/locations/[id]/route';
+import { GET as dMaster } from '../app/api/dispensary/master/route';
+import { GET as dMasterOne } from '../app/api/dispensary/master/[id]/route';
+import { GET as dItems, POST as dItemsPost } from '../app/api/dispensary/items/route';
+import { GET as dItem, PATCH as dItemPatch } from '../app/api/dispensary/items/[id]/route';
+import { POST as dUnitPost } from '../app/api/dispensary/items/[id]/units/route';
+import { PATCH as dUnitPatch } from '../app/api/dispensary/items/[id]/units/[unitId]/route';
+import { GET as dSuppliers, POST as dSuppliersPost } from '../app/api/dispensary/suppliers/route';
+import { GET as dSupplier, PATCH as dSupplierPatch } from '../app/api/dispensary/suppliers/[id]/route';
 
 test("DX-01: A-01 gives another organisation's display name for its public link, never an id", async () => {
   const B = await createOrg('dxb');
@@ -116,10 +130,26 @@ const HANDLERS: Record<string, Record<string, unknown>> = {
   '/api/roles': { GET: rolesGet, POST: rolesPost },
   '/api/roles/[key]': { PATCH: rolePatch },
   '/api/audit': { GET: auditGet },
+  '/api/dispensary/settings': { GET: dSettingsGet, PUT: dSettingsPut },
+  '/api/dispensary/setup': { POST: dSetup },
+  '/api/dispensary/premises': { GET: dPremises },
+  '/api/dispensary/premises/[id]/setup': { POST: dPremisesSetup },
+  '/api/dispensary/premises/[id]/settings': { PUT: dPremisesSettings },
+  '/api/dispensary/locations/[id]': { PATCH: dLocation },
+  '/api/dispensary/master': { GET: dMaster },
+  '/api/dispensary/master/[id]': { GET: dMasterOne },
+  '/api/dispensary/items': { GET: dItems, POST: dItemsPost },
+  '/api/dispensary/items/[id]': { GET: dItem, PATCH: dItemPatch },
+  '/api/dispensary/items/[id]/units': { POST: dUnitPost },
+  '/api/dispensary/items/[id]/units/[unitId]': { PATCH: dUnitPatch },
+  '/api/dispensary/suppliers': { GET: dSuppliers, POST: dSuppliersPost },
+  '/api/dispensary/suppliers/[id]': { GET: dSupplier, PATCH: dSupplierPatch },
 };
 const NONEXIST = '00000000-0000-4000-8000-000000000000';
-const paramsFor = (path: string): Record<string, string> | undefined =>
-  (path.includes('[id]') ? { id: NONEXIST } : path.includes('[key]') ? { key: 'no_such_role' } : undefined);
+const paramsFor = (path: string): Record<string, string> | undefined => {
+  const names = [...path.matchAll(/\[([a-zA-Z]+)\]/g)].map((m) => m[1]);
+  return names.length ? Object.fromEntries(names.map((n) => [n, n === 'key' ? 'no_such_role' : NONEXIST])) : undefined;
+};
 
 test('DX-04: every self-only endpoint refuses a body field naming another user or session', async () => {
   const A = await createOrg('dx4b');

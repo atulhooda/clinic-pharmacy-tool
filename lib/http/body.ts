@@ -15,9 +15,12 @@ export type Rule =
   | (Base & { type: 'uuid' })
   | (Base & { type: 'uuid[]'; max?: number })
   /** A map of keys to booleans, e.g. permission overrides: {"stock.view": true}. */
-  | (Base & { type: 'flags'; max?: number; keyPattern?: RegExp });
+  | (Base & { type: 'flags'; max?: number; keyPattern?: RegExp })
+  | (Base & { type: 'string[]'; max?: number; itemMax?: number; itemPattern?: RegExp; oneOf?: readonly string[] })
+  | (Base & { type: 'int[]'; max?: number; min?: number; itemMin?: number; itemMax?: number });
 type Value<R> = R extends { type: 'string' } ? string : R extends { type: 'int' } ? number : R extends { type: 'bool' } ? boolean
-  : R extends { type: 'uuid' } ? string : R extends { type: 'uuid[]' } ? string[] : R extends { type: 'flags' } ? Record<string, boolean> : never;
+  : R extends { type: 'uuid' } ? string : R extends { type: 'uuid[]' } ? string[] : R extends { type: 'flags' } ? Record<string, boolean>
+  : R extends { type: 'string[]' } ? string[] : R extends { type: 'int[]' } ? number[] : never;
 type Out<S extends Record<string, Rule>> = {
   [K in keyof S]: Value<S[K]> | (S[K]['nullable'] extends true ? null : never) | (S[K]['optional'] extends true ? undefined : never)
 };
@@ -47,6 +50,23 @@ function check(key: string, rule: Rule, v: unknown): unknown {
       if (!Array.isArray(v) || v.length > (rule.max ?? 100)) throw invalid(key, 'type');
       if (!v.every((x) => typeof x === 'string' && UUID_PATTERN.test(x))) throw invalid(key, 'format');
       return [...new Set(v.map((x: string) => x.toLowerCase()))];
+    }
+    case 'string[]': {
+      if (!Array.isArray(v) || v.length > (rule.max ?? 50)) throw invalid(key, 'type');
+      for (const x of v) {
+        if (typeof x !== 'string' || [...x].length > (rule.itemMax ?? 100) || [...x].length === 0) throw invalid(key, 'type');
+        if (rule.itemPattern && !rule.itemPattern.test(x)) throw invalid(key, 'format');
+        if (rule.oneOf && !rule.oneOf.includes(x)) throw invalid(key, 'enum');
+      }
+      return [...new Set(v as string[])];
+    }
+    case 'int[]': {
+      if (!Array.isArray(v) || v.length > (rule.max ?? 50) || v.length < (rule.min ?? 0)) throw invalid(key, 'length');
+      for (const x of v) {
+        if (typeof x !== 'number' || !Number.isSafeInteger(x)) throw invalid(key, 'type');
+        if ((rule.itemMin !== undefined && x < rule.itemMin) || (rule.itemMax !== undefined && x > rule.itemMax)) throw invalid(key, 'range');
+      }
+      return v;
     }
     case 'flags': {
       if (v === null || typeof v !== 'object' || Array.isArray(v)) throw invalid(key, 'type');
