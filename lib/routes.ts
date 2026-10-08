@@ -77,6 +77,7 @@ export const ROUTES: readonly RouteEntry[] = [
   { path: '/api/dispensary/items/[id]/units/[unitId]', methods: ['PATCH'], access: { permission: 'stock.items' }, endpoint: 'E-17' },
   { path: '/api/dispensary/goods-receipts', methods: ['GET'], access: { permission: 'stock.view' }, endpoint: 'E-23' },
   { path: '/api/dispensary/goods-receipts', methods: ['POST'], access: { permission: 'stock.receive' }, endpoint: 'E-23' },
+  { path: '/api/dispensary/goods-receipts/read-bill', methods: ['POST'], access: { permission: 'stock.receive' }, endpoint: 'E-51' },
   { path: '/api/dispensary/goods-receipts/[id]', methods: ['GET'], access: { permission: 'stock.view' }, endpoint: 'E-24' },
   { path: '/api/dispensary/goods-receipts/[id]', methods: ['PATCH'], access: { permission: 'stock.receive' }, endpoint: 'E-24' },
   { path: '/api/dispensary/goods-receipts/[id]/post', methods: ['POST'], access: { permission: 'stock.receive' }, endpoint: 'E-25' },

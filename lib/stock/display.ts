@@ -30,3 +30,12 @@ export function istDateTime(iso: string): string {
 
 /** `DD-MM-YYYY` for an ISO date. */
 export const dmy = (d: string): string => `${d.slice(8, 10)}-${d.slice(5, 7)}-${d.slice(0, 4)}`;
+
+/** The pack sizes a printed pack names, most likely first: "1*15" → [15, 15], "10*10" → [10, 100], "60GM" → [60]. */
+export function packSizes(pack: string | null): number[] {
+  if (!pack) return [];
+  const star = /(\d+)\s*[*x×]\s*(\d+)/i.exec(pack);
+  if (star) return [Number(star[2]), Number(star[1]) * Number(star[2])];
+  const n = /(\d+)/.exec(pack);
+  return n ? [Number(n[1])] : [];
+}

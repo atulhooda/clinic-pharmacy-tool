@@ -14,6 +14,7 @@ import { en } from '@/lib/i18n/en';
 import { api } from '@/components/settings/client';
 import { dmy } from './format';
 import { usePremises, useSuppliers } from './catalogue';
+import { BillReader } from './BillReader';
 
 const t = en.receive;
 type Row = { id: string; status: 'DRAFT' | 'POSTED' | 'REVERSED' | 'DISCARDED'; premisesId: string; supplierName: string; invoiceNo: string; invoiceDate: string;
@@ -29,6 +30,7 @@ export function ReceivePanel({ canEdit }: { canEdit: boolean }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [filter, setFilter] = useState<'ALL' | 'DRAFT' | 'POSTED'>('ALL');
   const [adding, setAdding] = useState(false);
+  const [reading, setReading] = useState(false);
   const [form, setForm] = useState({ premisesId: '', supplierId: null as string | null, invoiceNo: '', invoiceDate: todayIst() });
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { void api<{ items: Row[] }>('/api/dispensary/goods-receipts').then((r) => r.ok && setRows(r.body.items)); }, []);
@@ -58,9 +60,12 @@ export function ReceivePanel({ canEdit }: { canEdit: boolean }) {
           { key: 'POSTED', label: t.status.POSTED, count: rows.filter((r) => r.status === 'POSTED').length },
         ]} />
         {canEdit && (
-          <Button variant="brutal-blue" className="md:ml-auto" onClick={() => { setError(null); setAdding(true); }}>
-            <IconPlus className="h-4 w-4" /> {t.newDelivery}
-          </Button>
+          <span className="flex gap-2 md:ml-auto">
+            <Button onClick={() => setReading(true)}>{t.readPhoto}</Button>
+            <Button variant="brutal-blue" onClick={() => { setError(null); setAdding(true); }}>
+              <IconPlus className="h-4 w-4" /> {t.newDelivery}
+            </Button>
+          </span>
         )}
       </div>
       <div className="card overflow-hidden">
@@ -72,6 +77,9 @@ export function ReceivePanel({ canEdit }: { canEdit: boolean }) {
           { key: 'premises', header: t.premises, phoneHidden: true, cell: (r) => <span className="text-muted">{names.get(r.premisesId) ?? ''}</span> },
         ]} />
       </div>
+      <Sheet open={reading} onOpenChange={setReading} title={t.readTitle} wide>
+        {reading && <BillReader />}
+      </Sheet>
       <Sheet open={adding} onOpenChange={setAdding} title={t.newDelivery}>
         <form onSubmit={create} className="space-y-3" noValidate>
           {ready.length > 1 && (

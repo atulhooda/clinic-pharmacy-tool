@@ -23,6 +23,7 @@ export const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 export function isExempt(path: string): boolean {
   return /^\/api\/(auth|account)\//.test(path)
     || path === '/api/dispensary/dispenses/preview'
+    || path === '/api/dispensary/goods-receipts/read-bill'
     || /^\/api\/dispensary\/imports\/[^/]+\/validate$/.test(path);
 }
 

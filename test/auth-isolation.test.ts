@@ -52,6 +52,7 @@ import { GET as dGrn, PATCH as dGrnPatch } from '../app/api/dispensary/goods-rec
 import { POST as dGrnPostIt } from '../app/api/dispensary/goods-receipts/[id]/post/route';
 import { POST as dGrnDiscard } from '../app/api/dispensary/goods-receipts/[id]/discard/route';
 import { GET as dStatement } from '../app/api/dispensary/reports/stock-statement/route';
+import { POST as dReadBill } from '../app/api/dispensary/goods-receipts/read-bill/route';
 import { PATCH as dUnitPatch } from '../app/api/dispensary/items/[id]/units/[unitId]/route';
 import { GET as dSuppliers, POST as dSuppliersPost } from '../app/api/dispensary/suppliers/route';
 import { GET as dSupplier, PATCH as dSupplierPatch } from '../app/api/dispensary/suppliers/[id]/route';
@@ -150,6 +151,7 @@ const HANDLERS: Record<string, Record<string, unknown>> = {
   '/api/dispensary/items/[id]/units': { POST: dUnitPost },
   '/api/dispensary/items/[id]/units/[unitId]': { PATCH: dUnitPatch },
   '/api/dispensary/goods-receipts': { GET: dGrns, POST: dGrnPost },
+  '/api/dispensary/goods-receipts/read-bill': { POST: dReadBill },
   '/api/dispensary/goods-receipts/[id]': { GET: dGrn, PATCH: dGrnPatch },
   '/api/dispensary/goods-receipts/[id]/post': { POST: dGrnPostIt },
   '/api/dispensary/goods-receipts/[id]/discard': { POST: dGrnDiscard },
@@ -222,7 +224,8 @@ test('DX-77: every route is driven against its access rule, as owner, doctor, re
 test('DK-07: every write route needs an Idempotency-Key, except the documented exemptions (06a §12.2)', async () => {
   const A = await createOrg('dk7');
   const owner = await createStaff(A, { role: 'owner' });
-  const exempt = (p: string) => /^\/api\/(auth|account)\//.test(p);
+  // 06a §12.2's documented exemptions: auth, account, and the read-only POSTs that exist so far.
+  const exempt = (p: string) => /^\/api\/(auth|account)\//.test(p) || p === '/api/dispensary/goods-receipts/read-bill';
   let checked = 0;
   for (const r of ROUTES) {
     for (const m of r.methods.filter((x) => x !== 'GET')) {

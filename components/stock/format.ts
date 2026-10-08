@@ -1,6 +1,6 @@
 import { en } from '@/lib/i18n/en';
 
-export { dmy, istDateTime, packs, unitWord, type PackUnit } from '@/lib/stock/display';
+export { dmy, istDateTime, packs, packSizes, unitWord, type PackUnit } from '@/lib/stock/display';
 
 export const movementLabel = (type: string): string => (en.stock.movement as Record<string, string>)[type] ?? type;
 

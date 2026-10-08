@@ -21,7 +21,8 @@ export async function call(
           noIdempotencyKey?: boolean } = {},
 ): Promise<CallResult> {
   const headers = new Headers(opts.headers);
-  if (opts.body !== undefined) headers.set('content-type', 'application/json');
+  const multipart = opts.body instanceof FormData;
+  if (opts.body !== undefined && !multipart) headers.set('content-type', 'application/json');
   const method = (opts.method ?? (opts.body !== undefined ? 'POST' : 'GET')).toUpperCase();
   // Like the app's client: a fresh key per write unless the test sends its own (06a §12.2).
   if (method !== 'GET' && !opts.noIdempotencyKey && !headers.has('idempotency-key')) headers.set('idempotency-key', randomUUID());
@@ -30,7 +31,7 @@ export async function call(
   const req = new Request(`http://localhost${opts.path ?? '/api/x'}`, {
     method,
     headers,
-    body: opts.body === undefined ? undefined : typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body),
+    body: opts.body === undefined ? undefined : typeof opts.body === 'string' || multipart ? (opts.body as BodyInit) : JSON.stringify(opts.body),
   });
   const res = await (handler as Handler)(req, (opts.params ? { params: opts.params } : undefined) as never);
   const text = await res.text();
