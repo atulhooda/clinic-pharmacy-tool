@@ -43,6 +43,7 @@ try {
         DATABASE_URL: main.urls.app,
         MIGRATION_DATABASE_URL: main.urls.migrator,
         SELF_CHECK_TTL_MS: '0',
+        SESSION_SECRET: crypto.randomBytes(32).toString('hex'),
       },
     });
     child.on('exit', (c) => resolve(c ?? 1));

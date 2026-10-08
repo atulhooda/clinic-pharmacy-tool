@@ -82,9 +82,14 @@ test('DS-14: an unreviewed policy fails the check', async () => {
 
 test('a missing enforcement object fails the check (06b DL-18 pattern)', async () => {
   const u = await freshDatabase();
-  await as('migrator', (c) => c.query('DROP FUNCTION forbid_mutation()'), u);
+  // CASCADE also drops the append-only triggers that use it (002, 010); each is reported.
+  await as('migrator', (c) => c.query('DROP FUNCTION forbid_mutation() CASCADE'), u);
   const bad = await verifyAs(u);
-  assert.ok(bad.failures.includes('objects: function forbid_mutation is missing'), bad.failures.join('\n'));
+  for (const f of ['objects: function forbid_mutation is missing',
+    'objects: trigger audit_log_append_only on audit_log is missing or disabled',
+    'objects: trigger org_settings_history_append_only on org_settings_history is missing or disabled']) {
+    assert.ok(bad.failures.includes(f), `${f}\n---\n${bad.failures.join('\n')}`);
+  }
 });
 
 test('the app role owning a table fails the check', async () => {

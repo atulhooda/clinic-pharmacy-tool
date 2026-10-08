@@ -3,7 +3,7 @@ import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import pg from 'pg';
 import { as, pgCode, urls } from './harness/env';
-import { createOrg, type OrgFixture } from './harness/fixtures';
+import { createOrg, createStaff, createPrescriber, createDeviceAndSession, type OrgFixture } from './harness/fixtures';
 import { withTenant } from '../lib/db/tenant';
 import { listTables, checkRls } from '../lib/db/catalog';
 import { wrap } from '../lib/db/db';
@@ -51,13 +51,32 @@ test("DS-03: inside withTenant(A), inserting org B's row fails WITH CHECK", asyn
 });
 
 test("DS-04: inside withTenant(A), every tenant table returns only A's rows", async () => {
+  // Give both organisations rows in the identity tables, so a leak would be visible.
+  for (const o of [A, B]) {
+    const s = await createStaff(o, { role: 'owner' });
+    await createPrescriber(o);
+    await createDeviceAndSession(o, s.id);
+  }
   const tables = await scopedTables();
+  const othersExist = await as('super', async (c) => {
+    const out: string[] = [];
+    for (const t of tables) {
+      const key = t === 'organisations' ? 'id' : 'org_id';
+      const { rows } = await c.query(`SELECT count(*) AS n FROM "${t}" WHERE ${key} <> $1`, [A.orgId]);
+      if (Number(rows[0].n) > 0) out.push(t);
+    }
+    return out;
+  });
+  assert.ok(othersExist.length >= 8, `too few tables hold other tenants' rows to prove anything: ${othersExist}`);
   await withTenant(A.orgId, async (db) => {
     for (const t of tables) {
       const key = t === 'organisations' ? 'id' : 'org_id';
       const rows = await db.rows<{ k: string }>(`SELECT ${key}::text AS k FROM "${t}"`);
-      assert.ok(rows.length > 0, `${t}: A's own rows must be visible`);
       assert.ok(rows.every((r) => r.k === A.orgId), `${t}: another tenant's row is visible`);
+    }
+    for (const t of ['organisations', 'premises', 'staff_users', 'sessions']) {
+      const rows = await db.rows(`SELECT 1 FROM "${t}"`);
+      assert.ok(rows.length > 0, `${t}: A's own rows must be visible`);
     }
   }, appPool);
 });

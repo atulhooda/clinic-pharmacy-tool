@@ -53,7 +53,7 @@ test('DMG-03: each migration applies on top of the previous one, with its data i
   for (let k = 1; k <= repoCount; k++) {
     const r = runRunner({ MIGRATION_DATABASE_URL: u.migrator, MIGRATIONS_DIR: migrationsDir(k) });
     assert.equal(r.code, 0, r.out);
-    orgs.push((await createOrg(`m${k}`, { from: u })).orgId);
+    orgs.push((await createOrg(`m${k}`, { from: u, minimal: true })).orgId);
     const seen = await as('jobs', async (c) => (await c.query('SELECT id::text AS id FROM organisations')).rows.map((x) => x.id), u);
     for (const id of orgs) assert.ok(seen.includes(id), `organisation created after step ${orgs.indexOf(id) + 1} is gone`);
   }
