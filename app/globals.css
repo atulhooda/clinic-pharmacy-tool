@@ -1,8 +1,142 @@
+/* Copied with the UI kit from Ritu Desk's app/globals.css (desk origin/main @ 8bee594, 2026-10-08);
+   owned by this repo. Web-font variables replaced by the system stack (no build-time font download). */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-html,
+html {
+  font-size: 16px;
+}
 body {
-  @apply bg-canvas text-ink font-sans;
+  background-color: #f5f3ee; /* warm paper canvas */
+  color: #0b0b0c;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* One focus ring, in brand blue, everywhere — the old inputs used focus:border only. */
+:focus-visible {
+  outline: 2px solid #3949e6;
+  outline-offset: 2px;
+}
+
+/* ─── Indic typography: measured rules, not taste ───────────────────────────
+   Gujarati and Devanagari line boxes are ~1.3em against Inter's 1.21, so they
+   need ≥1.45 leading; uppercase has no meaning in either script and tracking
+   breaks the headline stroke. Weight 800 clots at 179ppi, so headings drop to
+   600. Anything rendered with lang="gu"/"hi" (or the .indic class) gets these. */
+:lang(gu),
+.indic-gu {
+  font-family: "Noto Sans Gujarati", "Noto Sans Devanagari", system-ui, sans-serif;
+  line-height: 1.5;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  text-decoration: none;
+}
+:lang(hi),
+:lang(mr),
+.indic-hi {
+  font-family: "Noto Sans Devanagari", system-ui, sans-serif;
+  line-height: 1.5;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  text-decoration: none;
+}
+:lang(gu) h1, :lang(gu) h2, :lang(gu) .text-display, :lang(gu) .text-h1,
+:lang(hi) h1, :lang(hi) h2, :lang(hi) .text-display, :lang(hi) .text-h1 {
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+@layer components {
+  /* Monospace uppercase micro-label — the brand's signature eyebrow/column head.
+     LATIN ONLY: never put Gujarati or Hindi inside this class. */
+  .mono-label {
+    @apply font-mono uppercase text-label text-faint;
+  }
+
+  /* Italic-serif accent in brand periwinkle — the editorial highlight */
+  .accent-serif {
+    @apply font-serif italic text-brand-peri font-normal;
+  }
+
+  /* Neo-brutalist primary button: solid ink, hard offset shadow, snaps on press.
+     44px minimum everywhere; 48px on a coarse pointer (see media rule below). */
+  .btn-brutal {
+    @apply inline-flex min-h-tap items-center justify-center gap-2 rounded-xl2 border-2 border-ink bg-ink px-4 py-2
+      text-small font-semibold text-white shadow-brutal transition-all
+      hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[6px_6px_0_0_#0B0B0C]
+      active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0_0_#0B0B0C]
+      disabled:opacity-50 disabled:shadow-none disabled:hover:translate-x-0 disabled:hover:translate-y-0;
+  }
+  .btn-brutal-blue {
+    @apply inline-flex min-h-tap items-center justify-center gap-2 rounded-xl2 border-2 border-brand bg-brand px-4 py-2
+      text-small font-semibold text-white shadow-brutal-blue transition-all
+      hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[6px_6px_0_0_#3949E6]
+      active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0_0_#3949E6]
+      disabled:opacity-50 disabled:shadow-none disabled:hover:translate-x-0 disabled:hover:translate-y-0;
+  }
+  .btn-ghost {
+    @apply inline-flex min-h-tap items-center justify-center gap-2 rounded-xl2 border border-hairline-firm bg-surface px-3.5 py-2
+      text-small font-medium text-ink transition-colors hover:bg-hairline/40 disabled:opacity-50;
+  }
+  .btn-danger {
+    @apply inline-flex min-h-tap items-center justify-center gap-2 rounded-xl2 border border-bad/40 bg-surface px-3.5 py-2
+      text-small font-medium text-bad transition-colors hover:bg-bad-wash disabled:opacity-50;
+  }
+
+  /* Standard surface card */
+  .card {
+    @apply rounded-xl2 border border-hairline bg-surface shadow-card;
+  }
+
+  /* One input look, one focus look. */
+  .field-input {
+    @apply w-full min-h-tap rounded-lg border border-hairline-firm bg-surface px-3 py-2 text-body text-ink outline-none
+      placeholder:text-faint focus:border-brand disabled:opacity-60;
+  }
+}
+
+/* Times / figures: tabular so columns don't jitter on poll */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Coarse pointer (the counter phone / tablet): every tap target lifts to 48px. */
+@media (pointer: coarse) {
+  .btn-brutal, .btn-brutal-blue, .btn-ghost, .btn-danger, .field-input, .tap {
+    min-height: 48px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Print: the day sheet only. Chrome hidden, real table, repeating header, rows
+   that never split, and the not-for-display line. */
+@media print {
+  body { background: #fff; color: #000; }
+  .no-print, nav, header, aside { display: none !important; }
+  .print-only { display: block !important; }
+  main { padding: 0 !important; }
+  table { border-collapse: collapse; width: 100%; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  a { text-decoration: none; color: inherit; }
+}
+.print-only { display: none; }
+
+/* Thin custom scrollbar for the dark rail + content */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(11, 11, 12, 0.16);
+  border-radius: 8px;
 }

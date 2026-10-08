@@ -89,13 +89,17 @@ test('DX-76: every route method is in the route table, and every endpoint route 
     }
   }
   for (const r of found) {
-    const entry = ROUTES.find((e) => e.path === r.path);
-    assert.ok(entry, `${r.path} is not in lib/routes.ts`);
-    assert.deepEqual([...entry.methods].sort(), r.methods, `${r.path}: methods differ from lib/routes.ts`);
-    if (entry.endpoint) {
-      assert.ok(covered.has(entry.endpoint), `${entry.endpoint} has no DX row in 06b`);
-    } else {
-      assert.ok(entry.isolationNote && entry.isolationNote.length > 10, `${r.path}: an operational route needs an isolation note`);
+    const entries = ROUTES.filter((e) => e.path === r.path);
+    assert.ok(entries.length > 0, `${r.path} is not in lib/routes.ts`);
+    const listed = entries.flatMap((e) => e.methods);
+    assert.equal(new Set(listed).size, listed.length, `${r.path}: a method is listed twice in lib/routes.ts`);
+    assert.deepEqual([...listed].sort(), r.methods, `${r.path}: methods differ from lib/routes.ts`);
+    for (const entry of entries) {
+      if (entry.endpoint) {
+        assert.ok(covered.has(entry.endpoint), `${entry.endpoint} has no DX row in 06b`);
+      } else {
+        assert.ok(entry.isolationNote && entry.isolationNote.length > 10, `${r.path}: an operational route needs an isolation note`);
+      }
     }
   }
   for (const e of ROUTES) assert.ok(found.some((r) => r.path === e.path), `lib/routes.ts lists ${e.path}, which does not exist`);

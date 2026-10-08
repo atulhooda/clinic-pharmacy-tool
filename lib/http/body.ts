@@ -7,8 +7,59 @@ import { HttpError } from './errors';
  */
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export type Rule = { type: 'string'; min?: number; max?: number; optional?: boolean; pattern?: RegExp };
-type Out<S extends Record<string, Rule>> = { [K in keyof S]: S[K]['optional'] extends true ? string | undefined : string };
+type Base = { optional?: boolean; nullable?: boolean };
+export type Rule =
+  | (Base & { type: 'string'; min?: number; max?: number; pattern?: RegExp })
+  | (Base & { type: 'int'; min?: number; max?: number })
+  | (Base & { type: 'bool' })
+  | (Base & { type: 'uuid' })
+  | (Base & { type: 'uuid[]'; max?: number })
+  /** A map of keys to booleans, e.g. permission overrides: {"stock.view": true}. */
+  | (Base & { type: 'flags'; max?: number; keyPattern?: RegExp });
+type Value<R> = R extends { type: 'string' } ? string : R extends { type: 'int' } ? number : R extends { type: 'bool' } ? boolean
+  : R extends { type: 'uuid' } ? string : R extends { type: 'uuid[]' } ? string[] : R extends { type: 'flags' } ? Record<string, boolean> : never;
+type Out<S extends Record<string, Rule>> = {
+  [K in keyof S]: Value<S[K]> | (S[K]['nullable'] extends true ? null : never) | (S[K]['optional'] extends true ? undefined : never)
+};
+
+const invalid = (field: string, rule: string) => new HttpError(422, 'FIELD_INVALID', 'A field is not valid.', { field, rule });
+
+function check(key: string, rule: Rule, v: unknown): unknown {
+  switch (rule.type) {
+    case 'string': {
+      if (typeof v !== 'string') throw invalid(key, 'type');
+      const len = [...v].length;
+      if ((rule.min !== undefined && len < rule.min) || (rule.max !== undefined && len > rule.max)) throw invalid(key, 'length');
+      if (rule.pattern && !rule.pattern.test(v)) throw invalid(key, 'format');
+      return v;
+    }
+    case 'int':
+      if (typeof v !== 'number' || !Number.isSafeInteger(v)) throw invalid(key, 'type');
+      if ((rule.min !== undefined && v < rule.min) || (rule.max !== undefined && v > rule.max)) throw invalid(key, 'range');
+      return v;
+    case 'bool':
+      if (typeof v !== 'boolean') throw invalid(key, 'type');
+      return v;
+    case 'uuid':
+      if (typeof v !== 'string' || !UUID_PATTERN.test(v)) throw invalid(key, 'format');
+      return v.toLowerCase();
+    case 'uuid[]': {
+      if (!Array.isArray(v) || v.length > (rule.max ?? 100)) throw invalid(key, 'type');
+      if (!v.every((x) => typeof x === 'string' && UUID_PATTERN.test(x))) throw invalid(key, 'format');
+      return [...new Set(v.map((x: string) => x.toLowerCase()))];
+    }
+    case 'flags': {
+      if (v === null || typeof v !== 'object' || Array.isArray(v)) throw invalid(key, 'type');
+      const entries = Object.entries(v as Record<string, unknown>);
+      if (entries.length > (rule.max ?? 100)) throw invalid(key, 'length');
+      for (const [k, b] of entries) {
+        if (typeof b !== 'boolean') throw invalid(key, 'type');
+        if (rule.keyPattern && !rule.keyPattern.test(k)) throw invalid(key, 'key');
+      }
+      return v;
+    }
+  }
+}
 
 export async function strictBody<S extends Record<string, Rule>>(req: Request, schema: S): Promise<Out<S>> {
   let body: unknown;
@@ -26,22 +77,19 @@ export async function strictBody<S extends Record<string, Rule>>(req: Request, s
       throw new HttpError(422, 'UNKNOWN_FIELD', 'The request has a field this route does not accept.', { field: key });
     }
   }
-  const out: Record<string, string | undefined> = {};
+  const out: Record<string, unknown> = {};
   for (const [key, rule] of Object.entries(schema)) {
     const v = input[key];
-    if (v === undefined || v === null) {
+    if (v === undefined) {
       if (rule.optional) continue;
       throw new HttpError(422, 'FIELD_REQUIRED', 'A required field is missing.', { field: key });
     }
-    if (typeof v !== 'string') throw new HttpError(422, 'FIELD_INVALID', 'A field has the wrong type.', { field: key, rule: 'type' });
-    const len = [...v].length;
-    if ((rule.min !== undefined && len < rule.min) || (rule.max !== undefined && len > rule.max)) {
-      throw new HttpError(422, 'FIELD_INVALID', 'A field has the wrong length.', { field: key, rule: 'length' });
+    if (v === null) {
+      if (rule.nullable) { out[key] = null; continue; }
+      if (rule.optional) continue;
+      throw new HttpError(422, 'FIELD_REQUIRED', 'A required field is missing.', { field: key });
     }
-    if (rule.pattern && !rule.pattern.test(v)) {
-      throw new HttpError(422, 'FIELD_INVALID', 'A field has the wrong format.', { field: key, rule: 'format' });
-    }
-    out[key] = v;
+    out[key] = check(key, rule, v);
   }
   return out as Out<S>;
 }

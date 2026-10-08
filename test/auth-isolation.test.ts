@@ -25,6 +25,16 @@ import { PUT as signingPinRoute } from '../app/api/account/signing-pin/route';
 import { GET as devicesGet, POST as devicesPost } from '../app/api/devices/route';
 import { POST as deviceRevokeRoute } from '../app/api/devices/[id]/revoke/route';
 import { effectivePermissions } from '../lib/auth/permissions';
+import { GET as settingsGet, PUT as settingsPut } from '../app/api/org/settings/route';
+import { GET as premisesGet, POST as premisesPost } from '../app/api/premises/route';
+import { PATCH as premisesPatch } from '../app/api/premises/[id]/route';
+import { GET as staffList, POST as staffPost } from '../app/api/staff/route';
+import { GET as staffGet, PATCH as staffPatch } from '../app/api/staff/[id]/route';
+import { POST as staffReset } from '../app/api/staff/[id]/reset/route';
+import { POST as staffRevoke } from '../app/api/staff/[id]/sessions/revoke/route';
+import { GET as rolesGet, POST as rolesPost } from '../app/api/roles/route';
+import { PATCH as rolePatch } from '../app/api/roles/[key]/route';
+import { GET as auditGet } from '../app/api/audit/route';
 
 test("DX-01: A-01 gives another organisation's display name for its public link, never an id", async () => {
   const B = await createOrg('dxb');
@@ -96,9 +106,20 @@ const HANDLERS: Record<string, Record<string, unknown>> = {
   '/api/account/signing-pin': { PUT: signingPinRoute },
   '/api/devices': { GET: devicesGet, POST: devicesPost },
   '/api/devices/[id]/revoke': { POST: deviceRevokeRoute },
+  '/api/org/settings': { GET: settingsGet, PUT: settingsPut },
+  '/api/premises': { GET: premisesGet, POST: premisesPost },
+  '/api/premises/[id]': { PATCH: premisesPatch },
+  '/api/staff': { GET: staffList, POST: staffPost },
+  '/api/staff/[id]': { GET: staffGet, PATCH: staffPatch },
+  '/api/staff/[id]/reset': { POST: staffReset },
+  '/api/staff/[id]/sessions/revoke': { POST: staffRevoke },
+  '/api/roles': { GET: rolesGet, POST: rolesPost },
+  '/api/roles/[key]': { PATCH: rolePatch },
+  '/api/audit': { GET: auditGet },
 };
 const NONEXIST = '00000000-0000-4000-8000-000000000000';
-const paramsFor = (path: string) => (path.includes('[id]') ? { id: NONEXIST } : undefined);
+const paramsFor = (path: string): Record<string, string> | undefined =>
+  (path.includes('[id]') ? { id: NONEXIST } : path.includes('[key]') ? { key: 'no_such_role' } : undefined);
 
 test('DX-04: every self-only endpoint refuses a body field naming another user or session', async () => {
   const A = await createOrg('dx4b');

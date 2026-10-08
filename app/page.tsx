@@ -55,7 +55,7 @@ export default async function Home() {
               <Link href="/account/password" className={link}>{t.changePassword}</Link>
               <Link href="/account/switch-pin" className={link}>{t.switchPin}</Link>
               {(session.hasSigningPin || session.needsSigningPin) && <Link href="/account/signing-pin" className={link}>{t.signingPin}</Link>}
-              {session.permissions.has('devices.manage') && <Link href="/settings/devices" className={link}>{t.devices}</Link>}
+              <Link href="/settings" className={link}>{t.settings}</Link>
             </div>
           </div>
         )}

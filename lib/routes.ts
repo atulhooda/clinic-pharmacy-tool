@@ -1,6 +1,7 @@
 /**
  * The route table (06a §12.1). Every method of every app/api/**\/route.ts must be listed
- * here; 06b DX-76 fails the build otherwise. A route with a spec endpoint id must also
+ * here; 06b DX-76 fails the build otherwise. A path whose methods need different access is listed
+ * once per access rule. A route with a spec endpoint id must also
  * have at least one DX (cross-tenant isolation) row in 06b that names that id, and DX-77
  * drives every route against its access rule.
  */
@@ -40,6 +41,22 @@ export const ROUTES: readonly RouteEntry[] = [
   { path: '/api/auth/reauth', methods: ['POST'], access: 'self', endpoint: 'A-12' },
   { path: '/api/account/switch-pin', methods: ['PUT'], access: 'self', endpoint: 'A-14' },
   { path: '/api/account/signing-pin', methods: ['PUT'], access: 'self', endpoint: 'A-15' },
-  { path: '/api/devices', methods: ['GET', 'POST'], access: { permission: 'devices.manage' }, endpoint: 'M-10', reauth: 'devices.register' },
+  { path: '/api/devices', methods: ['GET'], access: { permission: 'devices.manage' }, endpoint: 'M-10' },
+  { path: '/api/devices', methods: ['POST'], access: { permission: 'devices.manage' }, endpoint: 'M-10', reauth: 'devices.register' },
   { path: '/api/devices/[id]/revoke', methods: ['POST'], access: { permission: 'devices.manage' }, endpoint: 'M-11' },
+  { path: '/api/org/settings', methods: ['GET'], access: { permission: 'org.settings' }, endpoint: 'M-01' },
+  { path: '/api/org/settings', methods: ['PUT'], access: { permission: 'org.settings' }, endpoint: 'M-01', reauth: 'org.settings' },
+  { path: '/api/premises', methods: ['GET'], access: 'self', endpoint: 'M-02' },
+  { path: '/api/premises', methods: ['POST'], access: { permission: 'org.settings' }, endpoint: 'M-03', reauth: 'org.settings' },
+  { path: '/api/premises/[id]', methods: ['PATCH'], access: { permission: 'org.settings' }, endpoint: 'M-04', reauth: 'org.settings' },
+  { path: '/api/staff', methods: ['GET'], access: { permission: 'staff.manage' }, endpoint: 'M-05' },
+  { path: '/api/staff', methods: ['POST'], access: { permission: 'staff.manage' }, endpoint: 'M-05', reauth: 'staff.manage' },
+  { path: '/api/staff/[id]', methods: ['GET'], access: { permission: 'staff.manage' }, endpoint: 'M-06' },
+  { path: '/api/staff/[id]', methods: ['PATCH'], access: { permission: 'staff.manage' }, endpoint: 'M-06', reauth: 'staff.manage' },
+  { path: '/api/staff/[id]/reset', methods: ['POST'], access: { permission: 'staff.manage' }, endpoint: 'M-07', reauth: 'staff.manage' },
+  { path: '/api/staff/[id]/sessions/revoke', methods: ['POST'], access: { permission: 'staff.manage' }, endpoint: 'M-08' },
+  { path: '/api/roles', methods: ['GET'], access: { permission: 'roles.manage' }, endpoint: 'M-09' },
+  { path: '/api/roles', methods: ['POST'], access: { permission: 'roles.manage' }, endpoint: 'M-09', reauth: 'roles.manage' },
+  { path: '/api/roles/[key]', methods: ['PATCH'], access: { permission: 'roles.manage' }, endpoint: 'M-09', reauth: 'roles.manage' },
+  { path: '/api/audit', methods: ['GET'], access: { permission: 'audit.view' }, endpoint: 'M-12' },
 ];

@@ -16,14 +16,17 @@
     "test": "node scripts/test.mjs",
     "check:migrations": "node scripts/check-migrations.mjs",
     "check:db-access": "node scripts/check-db-access.mjs",
-    "gate": "npm run check:migrations && npm run check:db-access && npm run typecheck && npm test"
+    "check:classes": "tsx scripts/check-classes.ts",
+    "gate": "npm run check:migrations && npm run check:db-access && npm run check:classes && npm run typecheck && npm test"
   },
   "dependencies": {
+    "@base-ui/react": "1.8.0",
     "jose": "^5.10.0",
     "next": "^14.2.35",
     "pg": "^8.13.1",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "swr": "^2.2.5"
   },
   "devDependencies": {
     "@types/node": "^20.17.6",

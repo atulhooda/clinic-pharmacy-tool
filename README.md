@@ -5,7 +5,7 @@ A standalone, multi-tenant pharmacy and stock app for clinics. The design is **S
 - [06a](docs/specs/06a-dispensary-ledger.design.md): the design;
 - [06b](docs/specs/06b-dispensary-ledger.acceptance.md): the acceptance tests.
 
-**Status:** Milestone 1, PR 3 (the shared front-desk PC: trusted PCs, the lock screen, switch and signing PINs, re-auth grants, the per-username sign-in limit). No stock screens yet.
+**Status:** Milestone 1, PR 4 (administration: organisation settings, premises, staff, roles and grants, the audit log, and the UI kit copied from Ritu Desk). No stock screens yet.
 
 ## Requirements
 
@@ -17,7 +17,7 @@ A standalone, multi-tenant pharmacy and stock app for clinics. The design is **S
 
 ```sh
 npm install
-npm run gate      # migration rules, db-access rule, typecheck, and the full test suite on real Postgres
+npm run gate      # migration rules, db-access rule, the palette class lint, typecheck, and the full test suite on real Postgres
 npm test -- rls   # only the test files whose path contains "rls"
 ```
 
@@ -43,6 +43,8 @@ npm test -- rls   # only the test files whose path contains "rls"
      --premises-name Main --address "1 Road, City" --state-code 24 --owner-name "Owner Name" --owner-login owner
    ```
    Then open `localhost:3000/my-clinic/sign-in`. The first sign-in goes straight to the password change.
+
+**Settings** (`/settings`): the owner manages the organisation's security settings, premises, staff (a new person gets a one-time password, shown once), roles and grant overrides, trusted PCs and the audit log. Every change that matters asks for the owner's signing PIN.
 
 **A shared front-desk PC.** The owner opens Settings → Trusted PCs on that PC and trusts it (confirmed with their signing PIN). After that, each person signs in once a day on it; "Switch person" locks it, and the lock screen switches between the people signed in with their switch PIN. It also locks itself after 3 minutes without input.
 
