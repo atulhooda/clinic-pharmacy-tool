@@ -16,7 +16,7 @@ const id = (ctx: Ctx) => {
 export const GET = withSession<Ctx>({ permission: 'staff.manage' }, async (_req, ctx, s) => json(await getStaff(s, id(ctx))));
 
 /** M-06 PATCH: name, role, memberships, prescriber link, phone, active (`staff.manage` grant for the person). */
-export const PATCH = withSession<Ctx>({ permission: 'staff.manage' }, async (req, ctx, s) => {
+export const PATCH = withSession<Ctx>({ permission: 'staff.manage', idempotent: { status: 200, replay: (s, _rid, ctx) => getStaff(s, id(ctx)) } }, async (req, ctx, s) => {
   const body = await strictBody(req, {
     name: { type: 'string', min: 1, max: 64, optional: true },
     role: { type: 'string', min: 2, max: 32, optional: true },

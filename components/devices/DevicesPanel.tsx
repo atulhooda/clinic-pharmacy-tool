@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { en } from '@/lib/i18n/en';
 import { ReauthDialog } from '@/components/auth/ReauthDialog';
+import { newIdempotencyKey } from '@/components/settings/client';
 
 const t = en.devices;
 const field = 'field-input mt-1';
@@ -26,7 +27,7 @@ export function DevicesPanel({ orgId, premises, onDevice }: { orgId: string; pre
     setAsking(false);
     const res = await fetch('/api/devices', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'reauth-grant': grantId },
+      headers: { 'content-type': 'application/json', 'reauth-grant': grantId, 'idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({ name, premisesId }),
     });
     if (res.ok) return window.location.assign('/');
@@ -36,7 +37,7 @@ export function DevicesPanel({ orgId, premises, onDevice }: { orgId: string; pre
 
   async function revoke(id: string) {
     if (!window.confirm(t.confirmRevoke)) return;
-    const res = await fetch(`/api/devices/${id}/revoke`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    const res = await fetch(`/api/devices/${id}/revoke`, { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': newIdempotencyKey() }, body: '{}' });
     if (!res.ok) setError(t.failed);
     await load();
   }

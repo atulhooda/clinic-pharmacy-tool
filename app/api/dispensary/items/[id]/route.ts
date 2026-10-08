@@ -12,7 +12,8 @@ export const GET = withSession<Ctx>({ permission: 'stock.view' }, async (_req, c
   json(await getItem(s, pathId(ctx.params.id, 'ITEM_NOT_FOUND', 'No such item.'))));
 
 /** E-15: everything but the item's identity. */
-export const PATCH = withSession<Ctx>({ permission: 'stock.items' }, async (req, ctx, s) => {
+export const PATCH = withSession<Ctx>({ permission: 'stock.items', idempotent: { status: 200,
+  replay: (s, _rid, ctx) => getItem(s, pathId(ctx.params.id, 'ITEM_NOT_FOUND', 'No such item.')) } }, async (req, ctx, s) => {
   const body = await strictBody(req, ITEM_PATCH);
   return json(await patchItem(s, pathId(ctx.params.id, 'ITEM_NOT_FOUND', 'No such item.'), body as ItemPatch));
 });

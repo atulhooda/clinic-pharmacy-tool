@@ -16,14 +16,19 @@ export interface CallResult {
 
 export async function call(
   handler: unknown,
-  opts: { method?: string; path?: string; body?: unknown; cookie?: string; ip?: string; headers?: Record<string, string>; params?: Record<string, string> } = {},
+  opts: { method?: string; path?: string; body?: unknown; cookie?: string; ip?: string; headers?: Record<string, string>; params?: Record<string, string>;
+          /** Leave out the Idempotency-Key a browser sends on every write (06b DK-01, DK-07). */
+          noIdempotencyKey?: boolean } = {},
 ): Promise<CallResult> {
   const headers = new Headers(opts.headers);
   if (opts.body !== undefined) headers.set('content-type', 'application/json');
+  const method = (opts.method ?? (opts.body !== undefined ? 'POST' : 'GET')).toUpperCase();
+  // Like the app's client: a fresh key per write unless the test sends its own (06a §12.2).
+  if (method !== 'GET' && !opts.noIdempotencyKey && !headers.has('idempotency-key')) headers.set('idempotency-key', randomUUID());
   if (opts.cookie) headers.set('cookie', opts.cookie);
   headers.set('x-real-ip', opts.ip ?? `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.1`);
   const req = new Request(`http://localhost${opts.path ?? '/api/x'}`, {
-    method: opts.method ?? (opts.body !== undefined ? 'POST' : 'GET'),
+    method,
     headers,
     body: opts.body === undefined ? undefined : typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body),
   });
@@ -67,7 +72,7 @@ export class Browser {
     return [...this.jar].map(([k, v]) => `${k}=${v}`).join('; ');
   }
 
-  async call(handler: unknown, opts: { method?: string; path?: string; body?: unknown; headers?: Record<string, string>; params?: Record<string, string> } = {}): Promise<CallResult> {
+  async call(handler: unknown, opts: { method?: string; path?: string; body?: unknown; headers?: Record<string, string>; params?: Record<string, string>; noIdempotencyKey?: boolean } = {}): Promise<CallResult> {
     const r = await call(handler, { ...opts, cookie: this.cookieHeader() || undefined, ip: this.ip });
     for (const c of r.setCookies) {
       const [pair, ...attrs] = c.split(';');

@@ -8,6 +8,7 @@ import { SESSION_COOKIE, readSessionToken } from './token';
 import { DEVICE_COOKIE, readDeviceToken, type DeviceClaim } from './device';
 import { effectivePermissions, holdsPinGatedPermission, type Permission } from './permissions';
 import { writeAudit } from '../audit';
+import { claimKey, completeKey, keyCommitted, keyRolledBack } from '../http/idempotency';
 
 /**
  * The session guard (06a §3.4–3.6, route order step 2). Every request re-reads, in ONE query
@@ -240,13 +241,25 @@ export async function sessionFromToken(token: string | undefined, device: Device
  * lock updates that row, so it waits for this write to finish, and a write that starts after a
  * switch committed is refused. So no write ever commits under the previous person's name.
  */
-export async function withSessionTx<T>(s: Pick<Session, 'orgId' | 'sid' | 'deviceId'>, fn: (db: Db) => Promise<T>): Promise<T> {
-  return withTenant(s.orgId, async (db) => {
-    if (s.deviceId) {
-      const r = await db.rows<{ active: string | null }>(
-        'SELECT active_session_id AS active FROM device_state WHERE org_id = $1 AND device_id = $2 FOR SHARE', [s.orgId, s.deviceId]);
-      if (r[0]?.active !== s.sid) throw deviceLocked();
-    }
-    return fn(db);
-  });
+export async function withSessionTx<T>(s: Pick<Session, 'orgId' | 'sid' | 'deviceId' | 'staffUserId'>, fn: (db: Db) => Promise<T>): Promise<T> {
+  try {
+    const out = await withTenant(s.orgId, async (db) => {
+      if (s.deviceId) {
+        const r = await db.rows<{ active: string | null }>(
+          'SELECT active_session_id AS active FROM device_state WHERE org_id = $1 AND device_id = $2 FOR SHARE', [s.orgId, s.deviceId]);
+        if (r[0]?.active !== s.sid) throw deviceLocked();
+      }
+      // 06a §12.2: a write request's key is claimed first in its business transaction and
+      // completed in it, so only a committed success is remembered.
+      await claimKey(db, s.orgId, s.staffUserId);
+      const result = await fn(db);
+      await completeKey(db, s.orgId, result);
+      return result;
+    });
+    keyCommitted();
+    return out;
+  } catch (err) {
+    keyRolledBack();
+    throw err;
+  }
 }

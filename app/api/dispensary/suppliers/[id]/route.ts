@@ -12,7 +12,8 @@ export const GET = withSession<Ctx>({ permission: 'stock.view' }, async (_req, c
   json(await getSupplier(s, pathId(ctx.params.id, 'SUPPLIER_NOT_FOUND', 'No such supplier.'))));
 
 /** E-21 PATCH */
-export const PATCH = withSession<Ctx>({ permission: 'stock.items' }, async (req, ctx, s) => {
+export const PATCH = withSession<Ctx>({ permission: 'stock.items', idempotent: { status: 200,
+  replay: (s, _rid, ctx) => getSupplier(s, pathId(ctx.params.id, 'SUPPLIER_NOT_FOUND', 'No such supplier.')) } }, async (req, ctx, s) => {
   const body = await strictBody(req, optional(SUPPLIER));
   return json(await patchSupplier(s, pathId(ctx.params.id, 'SUPPLIER_NOT_FOUND', 'No such supplier.'), body));
 });

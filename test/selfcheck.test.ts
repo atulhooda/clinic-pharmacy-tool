@@ -92,6 +92,17 @@ test('a missing enforcement object fails the check (06b DL-18 pattern)', async (
   }
 });
 
+test('DL-18: dropping a ledger guard fails the check until it is restored', async () => {
+  const u = await freshDatabase();
+  await as('migrator', (c) => c.query('DROP TRIGGER stock_movements_validate ON stock_movements'), u);
+  const bad = await verifyAs(u);
+  assert.ok(bad.failures.includes('objects: trigger stock_movements_validate on stock_movements is missing or disabled'), bad.failures.join('\n'));
+  await as('migrator', (c) => c.query('CREATE TRIGGER stock_movements_validate BEFORE INSERT ON stock_movements FOR EACH ROW EXECUTE FUNCTION stock_movements_validate()'), u);
+  assert.deepEqual((await verifyAs(u)).failures, []);
+  await as('migrator', (c) => c.query('ALTER TABLE stock_movements DISABLE TRIGGER stock_movements_apply'), u);
+  assert.ok((await verifyAs(u)).failures.includes('objects: trigger stock_movements_apply on stock_movements is missing or disabled'));
+});
+
 test('the app role owning a table fails the check', async () => {
   const u = await freshDatabase();
   await as('super', (c) => c.query('ALTER TABLE premises OWNER TO pharmacy_app'), u);

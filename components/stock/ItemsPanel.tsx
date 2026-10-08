@@ -8,14 +8,24 @@ import Sheet from '@/components/ui/Sheet';
 import { TextField, SelectField } from '@/components/ui/Field';
 import FilterPills from '@/components/ui/FilterPills';
 import SearchField from '@/components/ui/SearchField';
+import KpiCard from '@/components/ui/KpiCard';
 import { IconPlus } from '@/components/ui/icons';
 import { en } from '@/lib/i18n/en';
+import { fmtPaise } from '@/lib/money';
 import { api } from '@/components/settings/client';
+import { dmy, istDateTime, movementLabel, packs, unitWord } from './format';
 
 const t = en.stock;
 type Unit = { id: string; name: string; baseUnitsPerUnit: number; isBase: boolean; dispensable: boolean; purchasable: boolean; active: boolean };
+type Stock = { onHandBase: number; dispensableBase: number; quarantinedBase: number; expiredBase: number; nearestExpiry: string | null;
+  lowStock: boolean; nearExpiry: boolean };
+type BatchRow = { id: string; batchNo: string; expiryDate: string; expired: boolean; mrpPaise: number; mrpUnitName: string; onHandBase: number;
+  locations: { locationId: string; name: string; kind: string; onHandBase: number }[] };
 type Item = { id: string; displayName: string; category: string; baseUnit: string; scheduleFlags: string[]; extraScheduleFlags: string[];
-  requiresPrescription: boolean; requiresPrescriptionImposed: boolean; reorderLevel: number | null; rackLocation: string | null; units?: Unit[] };
+  requiresPrescription: boolean; requiresPrescriptionImposed: boolean; reorderLevel: number | null; rackLocation: string | null; units?: Unit[];
+  stock?: Stock & { batches?: BatchRow[]; untracked?: { locationId: string; name: string; kind: string; onHandBase: number }[] } };
+type Movement = { id: string; type: string; qtyDelta: number; locationName: string; batchNo: string | null; actorLabel: string; occurredAt: string; reasonCode: string | null };
+type StockFilter = 'ALL' | 'LOW' | 'NEAR' | 'EXPIRED';
 type Master = { id: string; brandName: string; dosageForm: string; suggestedBaseUnit: string | null; salts: { name: string }[] };
 const CATEGORIES = ['MEDICINE', 'RETAIL_PRODUCT', 'INJECTABLE', 'CONSUMABLE'];
 const BASE_UNITS = ['TABLET', 'CAPSULE', 'ML', 'G', 'VIAL', 'UNIT', 'PIECE'];
@@ -31,6 +41,8 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
   const [masters, setMasters] = useState<Master[]>([]);
   const [draft, setDraft] = useState({ masterId: null as string | null, displayName: '', category: 'MEDICINE', baseUnit: 'TABLET' });
   const [open, setOpen] = useState<Item | null>(null);
+  const [stockFilter, setStockFilter] = useState<StockFilter>('ALL');
+  const [history, setHistory] = useState<{ items: Movement[]; next: string | null }>({ items: [], next: null });
   const [unit, setUnit] = useState({ name: '', per: '' });
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async (text: string) => {
@@ -38,7 +50,15 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
     if (r.ok) setItems(r.body.items);
   }, []);
   useEffect(() => { void load(''); }, [load]);
-  const reopen = async (id: string) => { const r = await api<Item>(`/api/dispensary/items/${id}`); if (r.ok) setOpen(r.body); };
+  const loadHistory = async (id: string, cursor: string | null) => {
+    const r = await api<{ items: Movement[]; nextCursor: string | null }>(`/api/dispensary/items/${id}/movements?limit=20${cursor ? `&cursor=${cursor}` : ''}`);
+    if (r.ok) setHistory((h) => ({ items: cursor ? [...h.items, ...r.body.items] : r.body.items, next: r.body.nextCursor }));
+  };
+  const reopen = async (id: string) => {
+    const r = await api<Item>(`/api/dispensary/items/${id}`);
+    if (r.ok) setOpen(r.body);
+    await loadHistory(id, null);
+  };
 
   async function searchMaster(e: FormEvent) {
     e.preventDefault();
@@ -78,15 +98,32 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
   }
 
   const needle = q.trim().toLowerCase();
-  const shown = items.filter((i) => (cat === 'ALL' || i.category === cat) && (!needle || i.displayName.toLowerCase().includes(needle)));
+  const stockMatch = (i: Item) => stockFilter === 'ALL' || (stockFilter === 'LOW' && i.stock?.lowStock)
+    || (stockFilter === 'NEAR' && i.stock?.nearExpiry) || (stockFilter === 'EXPIRED' && (i.stock?.expiredBase ?? 0) > 0);
+  const shown = items.filter((i) => (cat === 'ALL' || i.category === cat) && stockMatch(i) && (!needle || i.displayName.toLowerCase().includes(needle)));
+  const low = items.filter((i) => i.stock?.lowStock).length;
+  const near = items.filter((i) => i.stock?.nearExpiry).length;
+  const expired = items.filter((i) => (i.stock?.expiredBase ?? 0) > 0).length;
   const label = (c: string) => ({ MEDICINE: 'Medicine', RETAIL_PRODUCT: 'Retail', INJECTABLE: 'Injectable', CONSUMABLE: 'Consumable' } as Record<string, string>)[c] ?? c;
   return (
     <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <KpiCard label={t.items} value={items.length} />
+        <KpiCard label={t.lowStock} value={low} tone={low ? 'amber' : 'ink'} />
+        <KpiCard label={t.nearExpiryBadge} value={near} tone={near ? 'amber' : 'ink'} />
+        <KpiCard label={t.expiredBadge} value={expired} tone={expired ? 'red' : 'ink'} />
+      </div>
       <div className="flex flex-wrap items-center gap-3">
         <SearchField value={q} onChange={setQ} placeholder="Search items by name…" className="w-full md:w-80" />
         <FilterPills value={cat} onChange={setCat} options={[
           { key: 'ALL', label: 'All', count: items.length },
           ...CATEGORIES.map((c) => ({ key: c, label: label(c), count: items.filter((i) => i.category === c).length })),
+        ]} />
+ <FilterPills value={stockFilter} onChange={setStockFilter} options={[
+          { key: 'ALL', label: t.allStock },
+          { key: 'LOW', label: t.lowStock, count: low },
+          { key: 'NEAR', label: t.nearExpiryBadge, count: near },
+          { key: 'EXPIRED', label: t.expiredBadge, count: expired },
         ]} />
         {canEdit && (
           <Button variant="brutal-blue" className="md:ml-auto" onClick={() => { setError(null); setAdding(true); setMasters([]); }}>
@@ -98,6 +135,15 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
         <DataList rows={shown} rowKey={(i) => i.id} empty={items.length ? 'No item matches.' : 'No items yet. Add the first one.'} onRowClick={(i) => reopen(i.id)} columns={[
           { key: 'name', header: 'Item', primary: true, cell: (i) => (
             <span><span className="block font-semibold text-ink">{i.displayName}</span><span className="block text-micro text-muted">{label(i.category)} · {i.baseUnit.toLowerCase()}</span></span>) },
+          { key: 'balance', header: t.balance, align: 'right', cell: (i) => (
+            <span className="block text-right">
+              <span className="block font-semibold tnum text-ink">{unitWord(i.stock?.onHandBase ?? 0, i.baseUnit)}</span>
+              <span className="flex justify-end gap-1">
+                {i.stock?.lowStock && <Badge tone="warn">{t.lowStock}</Badge>}
+                {i.stock?.nearExpiry && <Badge tone="warn">{t.nearExpiryBadge}</Badge>}
+                {(i.stock?.expiredBase ?? 0) > 0 && <Badge tone="bad">{t.expiredBadge}</Badge>}
+              </span>
+            </span>) },
           { key: 'flags', header: t.scheduleFlags, cell: (i) => (
             <span className="flex flex-wrap gap-1">{i.scheduleFlags.length ? i.scheduleFlags.map((f) => <Badge key={f} tone="warn">{f}</Badge>) : <span className="text-faint">—</span>}</span>) },
           { key: 'rx', header: 'Prescription', cell: (i) => (i.requiresPrescription ? <Badge tone="bad">● Required</Badge> : <span className="text-faint">—</span>) },
@@ -138,6 +184,48 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
         {open && (
           <div className="space-y-5">
             <p className="text-small text-muted">{open.category} · {open.baseUnit}</p>
+            <section className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <KpiCard label={t.balance} value={packs(open.stock?.onHandBase ?? 0, open.baseUnit, open.units)} />
+                <KpiCard label={t.dispensableNow} value={packs(open.stock?.dispensableBase ?? 0, open.baseUnit, open.units)}
+                  tone={open.stock?.lowStock ? 'amber' : 'ink'} sub={open.stock?.nearestExpiry ? `${t.nearestExpiry}: ${dmy(open.stock.nearestExpiry)}` : undefined} />
+              </div>
+              {(open.stock?.batches?.length ?? 0) > 0 ? (
+                <div className="card overflow-hidden">
+                  <DataList rows={open.stock!.batches!} rowKey={(b) => b.id} empty={t.noStock} columns={[
+                    { key: 'no', header: t.batchNo, primary: true, cell: (b) => <span className="font-semibold">{b.batchNo}</span> },
+                    { key: 'exp', header: t.expiry, cell: (b) => (
+                      <span className="flex items-center gap-1">{dmy(b.expiryDate)}{b.expired && <Badge tone="bad">{t.expiredBadge}</Badge>}</span>) },
+                    { key: 'mrp', header: t.mrp, align: 'right', cell: (b) => <span className="tnum">{fmtPaise(b.mrpPaise)} / {b.mrpUnitName}</span> },
+                    { key: 'on', header: t.onHand, align: 'right', cell: (b) => (
+                      <span className="block text-right">
+                        <span className="block tnum font-semibold">{packs(b.onHandBase, open.baseUnit, open.units)}</span>
+                        <span className="block text-micro text-muted">{b.locations.map((l) => `${l.name} ${l.onHandBase}`).join(' · ')}</span>
+                      </span>) },
+                  ]} />
+                </div>
+              ) : (open.stock?.untracked?.length ?? 0) === 0 && <p className="text-small text-muted">{t.noStock}</p>}
+            </section>
+            <section>
+              <p className="text-small font-semibold">{t.history}</p>
+              {history.items.length === 0 ? <p className="text-small text-muted">{t.noHistory}</p> : (
+                <ul className="divide-y divide-hairline">
+                  {history.items.map((m) => (
+                    <li key={m.id} className="flex flex-wrap items-baseline justify-between gap-2 py-2 text-small">
+                      <span>
+                        <span className="font-medium text-ink">{movementLabel(m.type)}</span>
+                        <span className="text-muted"> · {m.batchNo ?? m.locationName} · {t.by} {m.actorLabel}</span>
+                      </span>
+                      <span className="flex items-baseline gap-3">
+                        <span className={`tnum font-semibold ${m.qtyDelta < 0 ? 'text-bad' : 'text-ok'}`}>{m.qtyDelta > 0 ? '+' : ''}{m.qtyDelta}</span>
+                        <span className="tnum text-micro text-muted">{istDateTime(m.occurredAt)}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {history.next && <Button className="mt-2" onClick={() => loadHistory(open.id, history.next)}>{t.loadMore}</Button>}
+            </section>
             <label className="flex items-center gap-2 text-small">
               <input type="checkbox" checked={open.requiresPrescription} disabled={!canEdit || open.requiresPrescriptionImposed}
                 onChange={(e) => patch({ requiresPrescription: e.target.checked })} /> {t.rxRequired}

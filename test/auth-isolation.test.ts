@@ -46,6 +46,7 @@ import { GET as dMasterOne } from '../app/api/dispensary/master/[id]/route';
 import { GET as dItems, POST as dItemsPost } from '../app/api/dispensary/items/route';
 import { GET as dItem, PATCH as dItemPatch } from '../app/api/dispensary/items/[id]/route';
 import { POST as dUnitPost } from '../app/api/dispensary/items/[id]/units/route';
+import { GET as dMovements } from '../app/api/dispensary/items/[id]/movements/route';
 import { PATCH as dUnitPatch } from '../app/api/dispensary/items/[id]/units/[unitId]/route';
 import { GET as dSuppliers, POST as dSuppliersPost } from '../app/api/dispensary/suppliers/route';
 import { GET as dSupplier, PATCH as dSupplierPatch } from '../app/api/dispensary/suppliers/[id]/route';
@@ -140,6 +141,7 @@ const HANDLERS: Record<string, Record<string, unknown>> = {
   '/api/dispensary/master/[id]': { GET: dMasterOne },
   '/api/dispensary/items': { GET: dItems, POST: dItemsPost },
   '/api/dispensary/items/[id]': { GET: dItem, PATCH: dItemPatch },
+  '/api/dispensary/items/[id]/movements': { GET: dMovements },
   '/api/dispensary/items/[id]/units': { POST: dUnitPost },
   '/api/dispensary/items/[id]/units/[unitId]': { PATCH: dUnitPatch },
   '/api/dispensary/suppliers': { GET: dSuppliers, POST: dSuppliersPost },
@@ -205,4 +207,25 @@ test('DX-77: every route is driven against its access rule, as owner, doctor, re
       }
     }
   }
+});
+
+test('DK-07: every write route needs an Idempotency-Key, except the documented exemptions (06a §12.2)', async () => {
+  const A = await createOrg('dk7');
+  const owner = await createStaff(A, { role: 'owner' });
+  const exempt = (p: string) => /^\/api\/(auth|account)\//.test(p);
+  let checked = 0;
+  for (const r of ROUTES) {
+    for (const m of r.methods.filter((x) => x !== 'GET')) {
+      // A fresh session each time: A-16 and sign-out end the caller's sessions.
+      const cookie = await signIn(A.slug, owner.login, owner.password);
+      const res = await call(HANDLERS[r.path][m], { method: m, path: r.path, cookie, body: {}, params: paramsFor(r.path), noIdempotencyKey: true });
+      if (exempt(r.path)) {
+        assert.notEqual(res.body.code, 'IDEMPOTENCY_KEY_REQUIRED', `${m} ${r.path} is exempt`);
+      } else {
+        assert.deepEqual([res.status, res.body.code], [400, 'IDEMPOTENCY_KEY_REQUIRED'], `${m} ${r.path}`);
+        checked++;
+      }
+    }
+  }
+  assert.ok(checked >= 22, `only ${checked} write routes were checked`);
 });

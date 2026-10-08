@@ -13,7 +13,7 @@ export const GET = withSession({ permission: 'org.settings' }, async (_req, _ctx
 });
 
 /** M-01 PUT: lock minutes (1–10), day reset (HH:MM IST), untrusted idle (5–720 or null). `If-Match` and an `org.settings` grant. */
-export const PUT = withSession({ permission: 'org.settings' }, async (req, _ctx, s) => {
+export const PUT = withSession({ permission: 'org.settings', idempotent: { status: 200, replay: (s) => getOrgSettings(s) } }, async (req, _ctx, s) => {
   const body = await strictBody(req, {
     deviceLockMinutes: { type: 'int', min: 1, max: 10 },
     dayResetTimeIst: { type: 'string', pattern: /^([01][0-9]|2[0-3]):[0-5][0-9]$/ },

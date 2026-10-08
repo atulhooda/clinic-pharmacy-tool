@@ -17,8 +17,8 @@ import { createOrg, createStaff, createPrescriber, createDeviceAndSession, inOrg
 type FkBuilder = (a: OrgFixture, b: OrgFixture) => Promise<string>;
 type UniqueBuilder = (a: OrgFixture, b: OrgFixture) => Promise<{ otherOrg: string; sameOrg: string }>;
 
-async function inTenant(org: OrgFixture, sql: string, params: unknown[]): Promise<string> {
-  const pool = new pg.Pool({ connectionString: urls.app, max: 1 });
+async function inTenant(org: OrgFixture, sql: string, params: unknown[], role: 'app' | 'migrator' = 'app'): Promise<string> {
+  const pool = new pg.Pool({ connectionString: urls[role], max: 1 });
   try {
     return await pgCode(withTenant(org.orgId, (db) => db.rows(sql, params), pool)).then((c) => (c === 'no-error' ? 'ok' : c));
   } finally {
@@ -37,6 +37,12 @@ interface World {
   premisesSettingsId: string;
   itemId: string;
   unitId: string;
+  /** An item with no stock movements, so its identity can still change (items_freeze). */
+  bareItemId: string;
+  locationId: string;
+  batchId: string;
+  /** An OPENING_BALANCE of +100 of batchId at locationId. */
+  movementId: string;
 }
 const worlds = new Map<string, World>();
 async function world(org: OrgFixture): Promise<World> {
@@ -56,13 +62,39 @@ async function world(org: OrgFixture): Promise<World> {
       [org.orgId, `World item ${org.orgId.slice(0, 6)}`])).rows[0].id as string;
     const unitId = (await c.query(`INSERT INTO item_units (org_id, item_id, name, base_units_per_unit) VALUES ($1, $2, 'strip', 10) RETURNING id`,
       [org.orgId, itemId])).rows[0].id as string;
-    return { stockSettingsId, premisesSettingsId, itemId, unitId };
+    const locationId = (await c.query(`INSERT INTO stock_locations (org_id, premises_id, name, kind, is_default) VALUES ($1, $2, 'World store', 'STORE', true) RETURNING id`,
+      [org.orgId, org.premisesId])).rows[0].id as string;
+    const batchId = (await c.query(`INSERT INTO batches (org_id, premises_id, item_id, batch_no, expiry_date, mrp_paise, mrp_unit_id) VALUES ($1, $2, $3, 'W1', '2099-12-31', 1000, $4) RETURNING id`,
+      [org.orgId, org.premisesId, itemId, unitId])).rows[0].id as string;
+    const movementId = (await c.query(`INSERT INTO stock_movements (org_id, premises_id, item_id, batch_id, location_id, movement_type, qty_delta, reference_type, reference_id,
+                                                                    actor_staff_id, actor_label, occurred_at, recorded_at)
+                                       VALUES ($1, $2, $3, $4, $5, 'OPENING_BALANCE', 100, 'STOCK_ADJUSTMENT_LINE', gen_random_uuid(), $6, 'World', now(), now()) RETURNING id`,
+      [org.orgId, org.premisesId, itemId, batchId, locationId, staff.id])).rows[0].id as string;
+    const bareItemId = (await c.query(`INSERT INTO items (org_id, category, display_name, base_unit, track_batches) VALUES ($1, 'INJECTABLE', $2, 'UNIT', true) RETURNING id`,
+      [org.orgId, `Bare item ${org.orgId.slice(0, 6)}`])).rows[0].id as string;
+    return { stockSettingsId, premisesSettingsId, itemId, unitId, bareItemId, locationId, batchId, movementId };
   });
   const w = { staffId: staff.id, prescriberId, deviceId, sessionId, settingsId, ...stock };
   worlds.set(org.orgId, w);
   return w;
 }
 const onlyKey = (org: OrgFixture) => `only_${org.orgId.slice(0, 6)}`;
+
+/** A movement row in o (as the app role unless stated); returns the Postgres error code or 'ok'. */
+function movement(o: OrgFixture, v: { premisesId?: string; itemId: string; batchId: string | null; locationId: string; actor: string;
+  type?: string; qty?: number; refType?: string; refId?: string; reverses?: string | null; seq?: number }): Promise<string> {
+  const cols = `org_id, premises_id, item_id, batch_id, location_id, movement_type, qty_delta, reference_type, reference_id,
+                actor_staff_id, actor_label, occurred_at, recorded_at, reverses_movement_id, reason_code`;
+  const reversal = v.type === 'REVERSAL';
+  const vals = [o.orgId, v.premisesId ?? o.premisesId, v.itemId, v.batchId, v.locationId, v.type ?? 'OPENING_BALANCE', v.qty ?? 1,
+    v.refType ?? (reversal ? 'STOCK_REVERSAL' : 'STOCK_ADJUSTMENT_LINE'), v.refId ?? randomUUID(), v.actor, v.reverses ?? null,
+    reversal ? 'DATA_ENTRY_ERROR' : null];
+  if (v.seq !== undefined) {
+    return inTenant(o, `INSERT INTO stock_movements (${cols}, seq) OVERRIDING SYSTEM VALUE
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'B', now(), now(), $11, $12, $13)`, [...vals, v.seq]);
+  }
+  return inTenant(o, `INSERT INTO stock_movements (${cols}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'B', now(), now(), $11, $12)`, vals);
+}
 
 let hashCache: string | undefined;
 const aHash = async () => (hashCache ??= await hashPassword('builder-password-1'));
@@ -195,7 +227,62 @@ export const FK_BUILDERS: Record<string, FkBuilder> = {
   },
   async items_container_unit_fk(a, b) {
     const [wa, wb] = [await world(a), await world(b)];
-    return inTenant(a, 'UPDATE items SET container_unit_id = $3, in_use_hours = 24 WHERE org_id = $1 AND id = $2', [a.orgId, wa.itemId, wb.unitId]);
+    return inTenant(a, 'UPDATE items SET container_unit_id = $3, in_use_hours = 24 WHERE org_id = $1 AND id = $2', [a.orgId, wa.bareItemId, wb.unitId]);
+  },
+  async batches_premises_fk(a, b) {
+    const wa = await world(a);
+    return inTenant(a, `INSERT INTO batches (org_id, premises_id, item_id, batch_no, expiry_date, mrp_paise, mrp_unit_id) VALUES ($1, $2, $3, 'X1', '2099-01-31', 100, $4)`,
+      [a.orgId, b.premisesId, wa.itemId, wa.unitId]);
+  },
+  async batches_item_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return inTenant(a, `INSERT INTO batches (org_id, premises_id, item_id, batch_no, expiry_date, mrp_paise, mrp_unit_id) VALUES ($1, $2, $3, 'X2', '2099-01-31', 100, $4)`,
+      [a.orgId, a.premisesId, wb.itemId, wa.unitId]);
+  },
+  async batches_mrp_unit_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return inTenant(a, `INSERT INTO batches (org_id, premises_id, item_id, batch_no, expiry_date, mrp_paise, mrp_unit_id) VALUES ($1, $2, $3, 'X3', '2099-01-31', 100, $4)`,
+      [a.orgId, a.premisesId, wa.itemId, wb.unitId]);
+  },
+  async stock_movements_item_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return movement(a, { itemId: wb.itemId, batchId: null, locationId: wa.locationId, actor: wa.staffId });
+  },
+  async stock_movements_batch_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return movement(a, { itemId: wa.itemId, batchId: wb.batchId, locationId: wa.locationId, actor: wa.staffId });
+  },
+  async stock_movements_location_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return movement(a, { itemId: wa.itemId, batchId: wa.batchId, locationId: wb.locationId, actor: wa.staffId });
+  },
+  async stock_movements_actor_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return movement(a, { itemId: wa.itemId, batchId: wa.batchId, locationId: wa.locationId, actor: wb.staffId });
+  },
+  async stock_movements_reverses_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return movement(a, { itemId: wa.itemId, batchId: wa.batchId, locationId: wa.locationId, actor: wa.staffId, type: 'REVERSAL', qty: -100, reverses: wb.movementId });
+  },
+  async stock_balances_item_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return inTenant(a, `INSERT INTO stock_balances (org_id, premises_id, item_id, batch_id, location_id, on_hand, last_movement_seq) VALUES ($1, $2, $3, NULL, $4, 0, 0)`,
+      [a.orgId, a.premisesId, wb.itemId, wa.locationId], 'migrator');
+  },
+  async stock_balances_batch_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return inTenant(a, `INSERT INTO stock_balances (org_id, premises_id, item_id, batch_id, location_id, on_hand, last_movement_seq) VALUES ($1, $2, $3, $4, $5, 0, 0)`,
+      [a.orgId, a.premisesId, wa.itemId, wb.batchId, wa.locationId], 'migrator');
+  },
+  async stock_balances_location_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return inTenant(a, `INSERT INTO stock_balances (org_id, premises_id, item_id, batch_id, location_id, on_hand, last_movement_seq) VALUES ($1, $2, $3, NULL, $4, 0, 0)`,
+      [a.orgId, a.premisesId, wa.itemId, wb.locationId], 'migrator');
+  },
+  async idempotency_keys_staff_fk(a, b) {
+    const wb = await world(b);
+    return inTenant(a, `INSERT INTO idempotency_keys (org_id, key, request_sha256, method, path, staff_user_id) VALUES ($1, 'fk-key-0001', repeat('a', 64), 'POST', '/api/x', $2)`,
+      [a.orgId, wb.staffId]);
   },
   async device_state_session_fk(a, b) {
     const [wa, wb] = [await world(a), await world(b)];
@@ -211,6 +298,61 @@ async function twice(a: OrgFixture, b: OrgFixture, insert: (o: OrgFixture, varia
 }
 
 export const UNIQUE_BUILDERS: Record<string, UniqueBuilder> = {
+  async batches_number_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return twice(a, b, (o) => inTenant(o, `INSERT INTO batches (org_id, premises_id, item_id, batch_no, expiry_date, mrp_paise, mrp_unit_id) VALUES ($1, $2, $3, 'DUP 1', '2099-02-28', 100, $4)`,
+      [o.orgId, o.premisesId, o === a ? wa.itemId : wb.itemId, o === a ? wa.unitId : wb.unitId]));
+  },
+  async batches_premises_item_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    const id = randomUUID();
+    return twice(a, b, (o, v) => inTenant(o, `INSERT INTO batches (org_id, id, premises_id, item_id, batch_no, expiry_date, mrp_paise, mrp_unit_id) VALUES ($1, $2, $3, $4, $5, '2099-02-28', 100, $6)`,
+      [o.orgId, id, o.premisesId, o === a ? wa.itemId : wb.itemId, v === 'again' ? 'ID 2' : 'ID 1', o === a ? wa.unitId : wb.unitId]));
+  },
+  async stock_movements_seq_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    const seq = 9_000_000_000 + Math.floor(Math.random() * 1_000_000);
+    return twice(a, b, (o) => { const w = o === a ? wa : wb; return movement(o, { itemId: w.itemId, batchId: w.batchId, locationId: w.locationId, actor: w.staffId, seq }); });
+  },
+  async stock_movements_premises_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    const id = randomUUID();
+    return twice(a, b, (o) => {
+      const w = o === a ? wa : wb;
+      return inTenant(o, `INSERT INTO stock_movements (org_id, id, premises_id, item_id, batch_id, location_id, movement_type, qty_delta, reference_type, reference_id,
+                                                       actor_staff_id, actor_label, occurred_at, recorded_at)
+                          VALUES ($1, $2, $3, $4, $5, $6, 'OPENING_BALANCE', 1, 'STOCK_ADJUSTMENT_LINE', gen_random_uuid(), $7, 'B', now(), now())`,
+        [o.orgId, id, o.premisesId, w.itemId, w.batchId, w.locationId, w.staffId]);
+    });
+  },
+  async stock_movements_reverses_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return twice(a, b, (o) => {
+      const w = o === a ? wa : wb;
+      return inTenant(o, `INSERT INTO stock_movements (org_id, premises_id, item_id, batch_id, location_id, movement_type, qty_delta, reference_type, reference_id,
+                                                       reason_code, actor_staff_id, actor_label, occurred_at, recorded_at, reverses_movement_id)
+                          VALUES ($1, $2, $3, $4, $5, 'REVERSAL', -100, 'STOCK_REVERSAL', gen_random_uuid(), 'DATA_ENTRY_ERROR', $6, 'B', now(), now(), $7)`,
+        [o.orgId, o.premisesId, w.itemId, w.batchId, w.locationId, w.staffId, w.movementId]);
+    });
+  },
+  async stock_movements_natural_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    const refId = randomUUID();
+    return twice(a, b, (o) => { const w = o === a ? wa : wb; return movement(o, { itemId: w.itemId, batchId: w.batchId, locationId: w.locationId, actor: w.staffId, refId }); });
+  },
+  async stock_balances_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return twice(a, b, (o) => {
+      const w = o === a ? wa : wb;
+      return inTenant(o, `INSERT INTO stock_balances (org_id, premises_id, item_id, batch_id, location_id, on_hand, last_movement_seq) VALUES ($1, $2, $3, NULL, $4, 0, 0)`,
+        [o.orgId, o.premisesId, w.itemId, w.locationId], 'migrator');
+    });
+  },
+  async idempotency_keys_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return twice(a, b, (o) => inTenant(o, `INSERT INTO idempotency_keys (org_id, key, request_sha256, method, path, staff_user_id) VALUES ($1, 'same-key-0001', repeat('b', 64), 'POST', '/api/x', $2)`,
+      [o.orgId, (o === a ? wa : wb).staffId]));
+  },
   async premises_name_key(a, b) {
     return twice(a, b, (o, v) => inTenant(o, 'INSERT INTO premises (org_id, name, address, state_code) VALUES ($1, $2, $3, $4)',
       [o.orgId, v === 'again' ? 'counter two' : 'Counter Two', 'x', '24']));

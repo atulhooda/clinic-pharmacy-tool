@@ -8,7 +8,9 @@ import { resetStaff } from '@/lib/admin/staff';
 export const dynamic = 'force-dynamic';
 
 /** M-07: a new one-time password (returned once); both PINs cleared; every session ended (`staff.manage` grant). */
-export const POST = withSession<{ params: { id: string } }>({ permission: 'staff.manage' }, async (req, ctx, s) => {
+export const POST = withSession<{ params: { id: string } }>({ permission: 'staff.manage', idempotent: { status: 200,
+  // The one-time password is shown once; a replay cannot show it again (reset again instead).
+  replay: async () => ({ oneTimePassword: null }) } }, async (req, ctx, s) => {
   await emptyBody(req);
   if (!UUID_PATTERN.test(ctx.params.id)) throw new HttpError(404, 'STAFF_NOT_FOUND', 'No such person.');
   return json(await resetStaff(s, ctx.params.id.toLowerCase(), grantFromRequest(req)));

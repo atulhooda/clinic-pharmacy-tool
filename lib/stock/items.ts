@@ -4,7 +4,8 @@ import { now } from '../clock';
 import { HttpError } from '../http/errors';
 import { writeAudit } from '../audit';
 import { withSessionTx, type Session } from '../auth/guard';
-import { checkViolation } from './scope';
+import { checkViolation, requirePremises } from './scope';
+import { itemStock, stockSummaries, type BatchView, type StockSummary } from './ledger';
 
 /**
  * The organisation's catalogue (06a §6.5; E-12 … E-17). One catalogue per business.
@@ -15,9 +16,10 @@ import { checkViolation } from './scope';
  *   master or Schedule X imposes it (422 REQUIRES_PRESCRIPTION_IMPOSED here; a trigger is
  *   the guarantee). Changing it is audited (DG-09).
  * - A unit's factor is immutable (a trigger); E-17 changes its flags only.
- * - Batches, balances and the ledger history (E-14's stock part, E-18) arrive with the ledger
- *   in PR 7, as does the identity lock (ITEM_IDENTITY_LOCKED); in Milestone 1, E-15 does not
- *   change an item's identity (base unit, batch tracking, master link).
+ * - Stock (PR 7, D-47): E-12 carries each item's balance over the caller's premises (or one,
+ *   `premisesId`) and filters on low stock and near expiry; E-14 adds the batches and
+ *   balances per location; E-18 (ledger.ts) is the history. In Milestone 1, E-15 never
+ *   changes an item's identity (R7-5); the items_freeze trigger guards it once stock has moved.
  */
 export type Category = 'MEDICINE' | 'RETAIL_PRODUCT' | 'INJECTABLE' | 'CONSUMABLE';
 export type BaseUnit = 'TABLET' | 'CAPSULE' | 'ML' | 'G' | 'VIAL' | 'UNIT' | 'PIECE';
@@ -64,8 +66,25 @@ async function unitsOf(db: Db, orgId: string, itemId: string): Promise<Unit[]> {
                           FROM item_units WHERE org_id = $1 AND item_id = $2 ORDER BY base_units_per_unit, lower(name)`, [orgId, itemId]);
 }
 
-/** E-12: list and search. (The low-stock and near-expiry filters need balances: PR 7.) */
-export async function listItems(s: Session, q: URLSearchParams): Promise<{ items: ItemView[]; nextCursor: string | null }> {
+const EMPTY_STOCK: StockSummary = { onHandBase: 0, dispensableBase: 0, quarantinedBase: 0, expiredBase: 0, nearestExpiry: null, lowStock: false, nearExpiry: false };
+
+function flag(q: URLSearchParams, name: string): boolean {
+  const v = q.get(name);
+  if (v === null || v === 'false') return false;
+  if (v === 'true') return true;
+  throw new HttpError(422, 'FIELD_INVALID', `${name} is true or false.`, { field: name, rule: 'enum' });
+}
+
+/** The premises a stock read covers: one (in the caller's membership, else 404) or all of the caller's. */
+function stockScope(s: Session, q: URLSearchParams): string[] {
+  const one = q.get('premisesId');
+  if (!one) return s.premises.map((p) => p.id);
+  requirePremises(s, one.toLowerCase());
+  return [one.toLowerCase()];
+}
+
+/** E-12: list and search, each item with its balance (D-47); `lowStock`, `nearExpiry`, `premisesId` filter by stock. */
+export async function listItems(s: Session, q: URLSearchParams): Promise<{ items: (ItemView & { stock: StockSummary })[]; nextCursor: string | null }> {
   const text = (q.get('q') ?? '').trim().toLowerCase().replace(/[%_\\]/g, '').slice(0, 80);
   const category = q.get('category');
   if (category && !(CATEGORIES as readonly string[]).includes(category)) throw new HttpError(422, 'FIELD_INVALID', 'Unknown category.', { field: 'category', rule: 'enum' });
@@ -75,24 +94,46 @@ export async function listItems(s: Session, q: URLSearchParams): Promise<{ items
   if (c) {
     try { after = JSON.parse(Buffer.from(c, 'base64url').toString()); } catch { throw new HttpError(422, 'FIELD_INVALID', 'Bad cursor.', { field: 'cursor', rule: 'format' }); }
   }
-  const rows = await withTenant(s.orgId, (db) => db.rows<ItemView>(
-    `${ITEM_SELECT}
-       AND ($2 = '' OR lower(i.display_name) LIKE '%' || $2 || '%' OR lower(i.display_name) % $2
-            OR EXISTS (SELECT 1 FROM jsonb_array_elements(m.salts) e WHERE lower(e->>'name') LIKE $2 || '%'))
-       AND ($3::text IS NULL OR i.category = $3)
-       AND ($4::text IS NULL OR (lower(i.display_name), i.id) > ($4, $5::uuid))
-     ORDER BY lower(i.display_name), i.id LIMIT $6`, [s.orgId, text, category, after?.n ?? null, after?.id ?? null, limit + 1]));
-  const page = rows.slice(0, limit);
-  const last = page[page.length - 1];
-  return { items: page, nextCursor: rows.length > limit && last ? Buffer.from(JSON.stringify({ n: last.displayName.toLowerCase(), id: last.id })).toString('base64url') : null };
+  const scope = stockScope(s, q);
+  const lowStock = flag(q, 'lowStock');
+  const nearExpiry = flag(q, 'nearExpiry');
+  return withTenant(s.orgId, async (db) => {
+    let only: string[] | null = null;
+    if (lowStock || nearExpiry) {
+      const all = await stockSummaries(db, s.orgId, scope, null);
+      only = [...all].filter(([, v]) => (!lowStock || v.lowStock) && (!nearExpiry || v.nearExpiry)).map(([id]) => id);
+    }
+    const rows = await db.rows<ItemView>(
+      `${ITEM_SELECT}
+         AND ($2 = '' OR lower(i.display_name) LIKE '%' || $2 || '%' OR lower(i.display_name) % $2
+              OR EXISTS (SELECT 1 FROM jsonb_array_elements(m.salts) e WHERE lower(e->>'name') LIKE $2 || '%'))
+         AND ($3::text IS NULL OR i.category = $3)
+         AND ($4::text IS NULL OR (lower(i.display_name), i.id) > ($4, $5::uuid))
+         AND ($7::uuid[] IS NULL OR i.id = ANY($7::uuid[]))
+       ORDER BY lower(i.display_name), i.id LIMIT $6`, [s.orgId, text, category, after?.n ?? null, after?.id ?? null, limit + 1, only]);
+    const page = rows.slice(0, limit);
+    const stock = await stockSummaries(db, s.orgId, scope, page.map((i) => i.id));
+    const last = page[page.length - 1];
+    return {
+      items: page.map((i) => ({ ...i, stock: stock.get(i.id) ?? EMPTY_STOCK })),
+      nextCursor: rows.length > limit && last ? Buffer.from(JSON.stringify({ n: last.displayName.toLowerCase(), id: last.id })).toString('base64url') : null,
+    };
+  });
 }
 
-/** E-14: the item, its effective flags and its units. */
-export async function getItem(s: Session, id: string): Promise<ItemView & { units: Unit[] }> {
+export interface ItemDetail extends ItemView {
+  units: Unit[];
+  /** At the caller's premises: the balance, the batches with their balances per location, untracked balances. */
+  stock: StockSummary & { batches: BatchView[]; untracked: Awaited<ReturnType<typeof itemStock>>['untracked'] };
+}
+
+/** E-14: the item, its effective flags, its units, and its stock at the caller's premises. */
+export async function getItem(s: Session, id: string): Promise<ItemDetail> {
   return withTenant(s.orgId, async (db) => {
     const item = (await db.rows<ItemView>(`${ITEM_SELECT} AND i.id = $2`, [s.orgId, id]))[0];
     if (!item) throw notFound();
-    return { ...item, units: await unitsOf(db, s.orgId, id) };
+    const summary = (await stockSummaries(db, s.orgId, s.premises.map((p) => p.id), [id])).get(id) ?? EMPTY_STOCK;
+    return { ...item, units: await unitsOf(db, s.orgId, id), stock: { ...summary, ...(await itemStock(db, s, id)) } };
   });
 }
 
@@ -124,7 +165,7 @@ function uniqueConflict(err: unknown): never {
 const imposed = () => new HttpError(422, 'REQUIRES_PRESCRIPTION_IMPOSED', 'The medicine master or Schedule X requires a prescription for this item.');
 
 /** E-13: create an item (from the master or custom) with its base unit. */
-export async function createItem(s: Session, input: ItemCreate): Promise<ItemView & { units: Unit[] }> {
+export async function createItem(s: Session, input: ItemCreate): Promise<ItemDetail> {
   const id = await withSessionTx(s, async (db) => {
     let masterRx = false;
     let masterFlags: string[] = [];
@@ -169,7 +210,7 @@ const PATCH_MAP: Record<keyof ItemPatch, string> = {
 };
 
 /** E-15: everything but the item's identity. */
-export async function patchItem(s: Session, id: string, input: ItemPatch): Promise<ItemView & { units: Unit[] }> {
+export async function patchItem(s: Session, id: string, input: ItemPatch): Promise<ItemDetail> {
   await withSessionTx(s, async (db) => {
     const cur = (await db.rows<ItemView>(`${ITEM_SELECT} AND i.id = $2 FOR UPDATE OF i`, [s.orgId, id]))[0];
     if (!cur) throw notFound();

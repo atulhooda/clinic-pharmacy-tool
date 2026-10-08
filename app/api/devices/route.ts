@@ -14,7 +14,11 @@ export const GET = withSession({ permission: 'devices.manage' }, async (req, _ct
 });
 
 /** M-10 POST: trust THIS browser (a `devices.register` grant for the organisation). */
-export const POST = withSession({ permission: 'devices.manage' }, async (req, _ctx, s) => {
+export const POST = withSession({ permission: 'devices.manage', idempotent: { status: 201, replay: async (s, rid) => {
+  // A replay cannot hand out the device token again; the device itself is re-read.
+  const d = (await listDevices(s, null)).find((x) => x.id === rid);
+  return { device: d ? { id: d.id, name: d.name } : null };
+} } }, async (req, _ctx, s) => {
   const body = await strictBody(req, {
     name: { type: 'string', min: 1, max: 64 },
     premisesId: { type: 'string', pattern: UUID_PATTERN },

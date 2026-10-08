@@ -10,7 +10,8 @@ export const dynamic = 'force-dynamic';
 export const GET = withSession({}, async (_req, _ctx, s) => json({ items: await listPremises(s) }));
 
 /** M-03: create a premises (`org.settings` + grant). */
-export const POST = withSession({ permission: 'org.settings' }, async (req, _ctx, s) => {
+export const POST = withSession({ permission: 'org.settings', idempotent: { status: 201,
+  replay: async (s, rid) => (await listPremises(s)).find((p) => p.id === rid) ?? null } }, async (req, _ctx, s) => {
   const body = await strictBody(req, {
     name: { type: 'string', min: 1, max: 80 },
     address: { type: 'string', min: 1, max: 500 },

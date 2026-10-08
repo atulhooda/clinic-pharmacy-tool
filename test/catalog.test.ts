@@ -42,9 +42,7 @@ test('DS-19: the FK check catches a non-composite FK and a batch FK without prem
     assert.equal(await pgCode(c.query(`CREATE TABLE fk_single (org_id uuid NOT NULL REFERENCES organisations (id) ON DELETE RESTRICT,
       id uuid NOT NULL, premises_id uuid REFERENCES premises (id), PRIMARY KEY (org_id, id))`)), '42830');
     await c.query('ROLLBACK TO SAVEPOINT s');
-    // A premises-scoped parent referenced without premises_id.
-    await c.query(`CREATE TABLE batches (org_id uuid NOT NULL REFERENCES organisations (id) ON DELETE RESTRICT,
-      id uuid NOT NULL, premises_id uuid NOT NULL, PRIMARY KEY (org_id, id), UNIQUE (org_id, premises_id, id))`);
+    // A premises-scoped parent (the real batches table, 019) referenced without premises_id.
     await c.query(`CREATE TABLE child_of_batches (org_id uuid NOT NULL REFERENCES organisations (id) ON DELETE RESTRICT,
       id uuid NOT NULL, batch_id uuid, PRIMARY KEY (org_id, id), FOREIGN KEY (org_id, batch_id) REFERENCES batches (org_id, id))`);
     // A tenant table pointing at the tenant root through a column other than org_id.

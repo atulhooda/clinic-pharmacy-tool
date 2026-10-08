@@ -13,7 +13,7 @@ export const GET = withSession({ permission: 'stock.view' }, async (_req, _ctx, 
 });
 
 /** E-03: change them (If-Match). */
-export const PUT = withSession({ permission: 'stock.settings' }, async (req, _ctx, s) => {
+export const PUT = withSession({ permission: 'stock.settings', idempotent: { status: 200, replay: (s) => getStockSettings(s) } }, async (req, _ctx, s) => {
   const body = await strictBody(req, STOCK_SETTINGS);
   const r = await putStockSettings(s, body as Parameters<typeof putStockSettings>[1], req.headers.get('if-match'));
   return json(r, { headers: { etag: `"${r.version}"` } });

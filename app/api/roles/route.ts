@@ -10,7 +10,8 @@ export const dynamic = 'force-dynamic';
 export const GET = withSession({ permission: 'roles.manage' }, async (_req, _ctx, s) => json({ items: await listRoles(s) }));
 
 /** M-09 POST: a custom role and its grants (`roles.manage` grant). */
-export const POST = withSession({ permission: 'roles.manage' }, async (req, _ctx, s) => {
+export const POST = withSession({ permission: 'roles.manage', idempotent: { status: 201,
+  replay: async (s, _rid, _ctx, body) => (await listRoles(s)).find((r) => r.key === String(body.key ?? '').trim().toLowerCase()) ?? null } }, async (req, _ctx, s) => {
   const body = await strictBody(req, {
     key: { type: 'string', min: 2, max: 32 },
     name: { type: 'string', min: 1, max: 64 },

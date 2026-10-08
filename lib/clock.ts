@@ -13,3 +13,18 @@ export function now(): Date {
 export function setClockForTests(at: Date | null): void {
   frozen = at ? at.getTime() : null;
 }
+
+/** The IST business date (`YYYY-MM-DD`) of an instant (06a §5; Asia/Kolkata has no DST). */
+export function istDate(at: Date): string {
+  return new Date(at.getTime() + 330 * 60_000).toISOString().slice(0, 10);
+}
+
+/** Today in IST, from the injectable clock. */
+export const todayIst = (): string => istDate(now());
+
+/** `YYYY-MM-DD` plus n days. */
+export function addDays(date: string, n: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}

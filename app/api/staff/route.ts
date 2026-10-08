@@ -2,7 +2,7 @@ import { json } from '@/lib/http/api';
 import { strictBody } from '@/lib/http/body';
 import { withSession } from '@/lib/http/session-route';
 import { grantFromRequest } from '@/lib/auth/reauth';
-import { listStaff, createStaff } from '@/lib/admin/staff';
+import { getStaff, listStaff, createStaff } from '@/lib/admin/staff';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,7 +10,9 @@ export const dynamic = 'force-dynamic';
 export const GET = withSession({ permission: 'staff.manage' }, async (_req, _ctx, s) => json({ items: await listStaff(s) }));
 
 /** M-05 POST: create a person (`staff.manage` grant for the organisation). The one-time password is returned once. */
-export const POST = withSession({ permission: 'staff.manage' }, async (req, _ctx, s) => {
+export const POST = withSession({ permission: 'staff.manage', idempotent: { status: 201,
+  // The one-time password is shown once; a replay re-reads the person only.
+  replay: async (s, rid) => ({ staff: await getStaff(s, rid as string), oneTimePassword: null }) } }, async (req, _ctx, s) => {
   const body = await strictBody(req, {
     name: { type: 'string', min: 1, max: 64 },
     login: { type: 'string', min: 3, max: 32 },
