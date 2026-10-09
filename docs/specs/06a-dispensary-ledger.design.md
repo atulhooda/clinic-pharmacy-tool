@@ -160,7 +160,7 @@ One engineer maintains both apps, so the stack is Ritu Desk's unless a row says 
 | Registers | an HTML print view plus CSV | **Different.** The desk prints prescriptions with a server-side pdfkit + HarfBuzz engine. v1 does not need one: the browser shapes Gujarati and Devanagari names correctly when it prints. A server PDF is Phase 2, if an inspector asks for files. |
 | File storage | prescription photos as `BYTEA` in Postgres, in their own table: compressed in the browser, size-capped, magic-byte sniffed, SHA-256 recorded | the same approach as Ritu Desk's uploads. **They move to object storage when the table reaches 10 GB in total** (§6.2, D-35). |
 | Tests | `node:test` + `node:assert` (run through `tsx`); a **real Postgres ≥ 15** with the real roles and migrations; `fast-check` | same idea. **The harness starts a throwaway cluster from the local Postgres binaries** (`initdb`/`pg_ctl`, TCP on 127.0.0.1), or uses `TEST_PG_SUPERUSER_URL` when given (CI with a Docker service). Docker is not required (R6-6). |
-| Hosting | Railway: one project with the web service, a cron service and Postgres ≥ 15 | same platform, but **its own project**, separate from Ritu Desk (D-37) |
+| Hosting | Railway: the web service, a cron service and Postgres ≥ 15 | same platform, with **services and a database of its own**, separate from Ritu Desk's: in its own project (D-37), or for the pilot in the pilot clinic's project (D-52) |
 | Messaging | staff OTP through the WhatsApp Cloud API (an Engageo-owned number) and a DLT-registered SMS provider, both over `fetch` | new (the desk has no OTP); no SDK |
 
 Nothing in the table is new technology to the engineer. Each of the three deliberate differences removes work or risk:

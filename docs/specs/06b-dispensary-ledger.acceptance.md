@@ -997,7 +997,7 @@ The reader is replaced by a fixed fake in these rows (no network): it returns a 
 
 ### Pilot go-live (after Milestone 1)
 
-1. Hosting in its own Railway project; **DS-12** checked there.
+1. Hosting (D-52); **DS-12** checked there: no service variable of the app holds a superuser DSN.
 2. **DMG-10:** the restore drill done.
 3. `PIN_PEPPERS` set as a Railway variable; the rotation rehearsed once on staging (06a §3.12).
 4. **A signed DPA** with the organisation (06 OQ-24).
