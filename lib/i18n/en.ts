@@ -208,6 +208,9 @@ export const en = {
     noHistory: 'Nothing has moved yet.',
     loadMore: 'Show older',
     by: 'by',
+    useFor: 'Used for',
+    useForHint: 'Given to patients, used in the clinic during treatment (procedures, drips, consultations), or both.',
+    use: { ALL: 'All', PATIENTS: 'Given to patients', IN_CLINIC: 'Used in clinic', BOTH: 'Both' },
     adjust: {
       button: 'Adjust stock',
       short: 'Adjust',
@@ -252,6 +255,9 @@ export const en = {
   receive: {
     title: 'Receive stock',
     subtitle: 'Enter each supplier bill as a delivery. It stays a draft until you post it; posting adds the stock.',
+    suppliersSubtitle: 'Who you buy from, and whether their drug licence is in date today.',
+    tabDeliveries: 'Deliveries',
+    tabSuppliers: 'Suppliers',
     newDelivery: 'New delivery',
     supplier: 'Supplier',
     premises: 'Premises',

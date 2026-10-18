@@ -36,7 +36,7 @@ export default async function Home() {
     { done: sum.dispensaryReady, label: 'Set up the dispensary', href: '/stock/setup' },
     { done: sum.premises > 0 && sum.premisesReady === sum.premises, label: `Choose each premises' dispensing mode (${sum.premisesReady} of ${sum.premises})`, href: '/stock/setup' },
     { done: (sum.items ?? 0) > 0, label: 'Add the items you stock', href: '/stock/items' },
-    { done: (sum.suppliers ?? 0) > 0, label: 'Add your suppliers', href: '/stock/suppliers' },
+    { done: (sum.suppliers ?? 0) > 0, label: 'Add your suppliers', href: '/stock/receive?tab=suppliers' },
     { done: session.hasSigningPin || !session.needsSigningPin, label: 'Set your signing PIN', href: '/account/signing-pin' },
   ];
   const left = steps.filter((x) => !x.done).length;

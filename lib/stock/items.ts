@@ -27,6 +27,11 @@ export const CATEGORIES: readonly Category[] = ['MEDICINE', 'RETAIL_PRODUCT', 'I
 export const BASE_UNITS: readonly BaseUnit[] = ['TABLET', 'CAPSULE', 'ML', 'G', 'VIAL', 'UNIT', 'PIECE'];
 export const SCHEDULE_FLAGS = ['H', 'H1', 'X', 'G', 'NDPS', 'H2'] as const;
 export const STORAGE = ['ROOM_TEMPERATURE', 'BELOW_25C', 'BELOW_30C', 'COLD_2_8C', 'FROZEN'] as const;
+/** D-54: given to patients, used in the clinic during treatment, or both. */
+export const USE_FOR = ['PATIENTS', 'IN_CLINIC', 'BOTH'] as const;
+export type UseFor = (typeof USE_FOR)[number];
+/** An item with no choice yet: injectables and consumables are used in the clinic; the rest go to patients. */
+const USE_FOR_SQL = `coalesce(i.use_for, CASE WHEN i.category IN ('INJECTABLE','CONSUMABLE') THEN 'IN_CLINIC' ELSE 'PATIENTS' END)`;
 
 export interface Unit { id: string; name: string; baseUnitsPerUnit: number; isBase: boolean; dispensable: boolean; purchasable: boolean; active: boolean }
 export interface ItemView {
@@ -36,6 +41,7 @@ export interface ItemView {
   displayName: string;
   baseUnit: BaseUnit;
   trackBatches: boolean;
+  useFor: UseFor;
   extraScheduleFlags: string[];
   scheduleFlags: string[];
   requiresPrescription: boolean;
@@ -50,7 +56,7 @@ export interface ItemView {
 }
 const ITEM_SELECT = `
   SELECT i.id, i.master_id AS "masterId", i.category, i.display_name AS "displayName", i.base_unit AS "baseUnit",
-         i.track_batches AS "trackBatches", i.extra_schedule_flags AS "extraScheduleFlags",
+         i.track_batches AS "trackBatches", ${USE_FOR_SQL} AS "useFor", i.extra_schedule_flags AS "extraScheduleFlags",
          ARRAY(SELECT DISTINCT f FROM unnest(coalesce(m.schedule_flags, '{}') || i.extra_schedule_flags) f ORDER BY f) AS "scheduleFlags",
          i.requires_prescription AS "requiresPrescription",
          (coalesce(m.requires_prescription, false) OR 'X' = ANY (coalesce(m.schedule_flags, '{}') || i.extra_schedule_flags)) AS "requiresPrescriptionImposed",
@@ -88,6 +94,9 @@ export async function listItems(s: Session, q: URLSearchParams): Promise<{ items
   const text = (q.get('q') ?? '').trim().toLowerCase().replace(/[%_\\]/g, '').slice(0, 80);
   const category = q.get('category');
   if (category && !(CATEGORIES as readonly string[]).includes(category)) throw new HttpError(422, 'FIELD_INVALID', 'Unknown category.', { field: 'category', rule: 'enum' });
+  // `use=PATIENTS` lists what is given to patients, `use=IN_CLINIC` what the clinic uses; BOTH is in each.
+  const use = q.get('use');
+  if (use && use !== 'PATIENTS' && use !== 'IN_CLINIC') throw new HttpError(422, 'FIELD_INVALID', 'Unknown use.', { field: 'use', rule: 'enum' });
   const limit = Math.min(Math.max(Number(q.get('limit') ?? 50) || 50, 1), 200);
   let after: { n: string; id: string } | null = null;
   const c = q.get('cursor');
@@ -110,7 +119,8 @@ export async function listItems(s: Session, q: URLSearchParams): Promise<{ items
          AND ($3::text IS NULL OR i.category = $3)
          AND ($4::text IS NULL OR (lower(i.display_name), i.id) > ($4, $5::uuid))
          AND ($7::uuid[] IS NULL OR i.id = ANY($7::uuid[]))
-       ORDER BY lower(i.display_name), i.id LIMIT $6`, [s.orgId, text, category, after?.n ?? null, after?.id ?? null, limit + 1, only]);
+         AND ($8::text IS NULL OR ${USE_FOR_SQL} IN ($8, 'BOTH'))
+       ORDER BY lower(i.display_name), i.id LIMIT $6`, [s.orgId, text, category, after?.n ?? null, after?.id ?? null, limit + 1, only, use]);
     const page = rows.slice(0, limit);
     const stock = await stockSummaries(db, s.orgId, scope, page.map((i) => i.id));
     const last = page[page.length - 1];
@@ -143,6 +153,7 @@ export interface ItemCreate {
   displayName: string;
   baseUnit: BaseUnit;
   trackBatches?: boolean;
+  useFor?: UseFor;
   extraScheduleFlags?: string[];
   requiresPrescription?: boolean;
   customManufacturerName?: string | null;
@@ -185,12 +196,12 @@ export async function createItem(s: Session, input: ItemCreate): Promise<ItemDet
     const item = (await db.rows<{ id: string }>(
       `INSERT INTO items (org_id, master_id, category, display_name, base_unit, track_batches, extra_schedule_flags, requires_prescription,
                           custom_manufacturer_name, custom_manufacturer_address, hsn_code_override, storage_condition,
-                          reorder_level, reorder_qty, rack_location, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16) RETURNING id`,
+                          reorder_level, reorder_qty, rack_location, use_for, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $17, $16, $16) RETURNING id`,
       [s.orgId, input.masterId ?? null, input.category, input.displayName.trim(), input.baseUnit,
         input.trackBatches ?? input.category !== 'CONSUMABLE', extra, rx, input.customManufacturerName ?? null,
         input.customManufacturerAddress ?? null, input.hsnCodeOverride ?? null, input.storageCondition ?? null,
-        input.reorderLevel ?? null, input.reorderQty ?? null, input.rackLocation ?? null, at]).catch(uniqueConflict))[0];
+        input.reorderLevel ?? null, input.reorderQty ?? null, input.rackLocation ?? null, at, input.useFor ?? null]).catch(uniqueConflict))[0];
     await db.rows(`INSERT INTO item_units (org_id, item_id, name, base_units_per_unit, is_base, created_at) VALUES ($1, $2, $3, 1, true, $4)`,
       [s.orgId, item.id, input.baseUnit.toLowerCase(), at]);
     await writeAudit(db, { orgId: s.orgId, action: 'item.created', actorLabel: s.name, actorRole: s.roleKey,
@@ -206,7 +217,7 @@ const PATCH_MAP: Record<keyof ItemPatch, string> = {
   category: 'category', displayName: 'display_name', extraScheduleFlags: 'extra_schedule_flags', requiresPrescription: 'requires_prescription',
   customManufacturerName: 'custom_manufacturer_name', customManufacturerAddress: 'custom_manufacturer_address',
   hsnCodeOverride: 'hsn_code_override', storageCondition: 'storage_condition', reorderLevel: 'reorder_level',
-  reorderQty: 'reorder_qty', rackLocation: 'rack_location', active: 'active',
+  reorderQty: 'reorder_qty', rackLocation: 'rack_location', active: 'active', useFor: 'use_for',
 };
 
 /** E-15: everything but the item's identity. */

@@ -1,6 +1,6 @@
 import { UUID_PATTERN, type Rule } from '../http/body';
 import { HttpError } from '../http/errors';
-import { CATEGORIES, BASE_UNITS, SCHEDULE_FLAGS, STORAGE } from './items';
+import { CATEGORIES, BASE_UNITS, SCHEDULE_FLAGS, STORAGE, USE_FOR } from './items';
 
 /** Request schemas shared by the dispensary routes (strictBody: unknown keys are 422). */
 const date = /^\d{4}-\d{2}-\d{2}$/;
@@ -42,6 +42,7 @@ const ITEM_COMMON = {
   reorderLevel: { type: 'int', min: 0, max: 10_000_000, nullable: true },
   reorderQty: { type: 'int', min: 1, max: 10_000_000, nullable: true },
   rackLocation: { type: 'string', max: 40, nullable: true },
+  useFor: { type: 'string', pattern: enumPattern(USE_FOR) },
 } as const satisfies Record<string, Rule>;
 
 export const ITEM_CREATE = {

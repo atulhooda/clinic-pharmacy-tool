@@ -23,7 +23,8 @@ type Stock = { onHandBase: number; dispensableBase: number; quarantinedBase: num
   lowStock: boolean; nearExpiry: boolean };
 type BatchRow = { id: string; premisesId: string; batchNo: string; expiryDate: string; expired: boolean; mrpPaise: number; mrpUnitName: string; onHandBase: number;
   locations: { locationId: string; name: string; kind: string; onHandBase: number }[] };
-type Item = { id: string; masterId: string | null; displayName: string; category: string; baseUnit: string; trackBatches: boolean; scheduleFlags: string[]; extraScheduleFlags: string[];
+type UseFor = 'PATIENTS' | 'IN_CLINIC' | 'BOTH';
+type Item = { id: string; masterId: string | null; displayName: string; category: string; baseUnit: string; trackBatches: boolean; useFor: UseFor; scheduleFlags: string[]; extraScheduleFlags: string[];
   requiresPrescription: boolean; requiresPrescriptionImposed: boolean; reorderLevel: number | null; rackLocation: string | null; units?: Unit[];
   stock?: Stock & { batches?: BatchRow[]; untracked?: { premisesId: string; locationId: string; name: string; kind: string; onHandBase: number }[] } };
 type Movement = { id: string; type: string; qtyDelta: number; locationName: string; batchNo: string | null; actorLabel: string; occurredAt: string; reasonCode: string | null };
@@ -32,6 +33,9 @@ type Master = { id: string; brandName: string; dosageForm: string; suggestedBase
 const CATEGORIES = ['MEDICINE', 'RETAIL_PRODUCT', 'INJECTABLE', 'CONSUMABLE'];
 const BASE_UNITS = ['TABLET', 'CAPSULE', 'ML', 'G', 'VIAL', 'UNIT', 'PIECE'];
 const FLAGS = ['H', 'H1', 'X', 'G', 'NDPS', 'H2'];
+const USES: UseFor[] = ['PATIENTS', 'IN_CLINIC', 'BOTH'];
+/** D-54: what an item is for when nobody has chosen (the server's default too). */
+const defaultUse = (category: string): UseFor => (category === 'INJECTABLE' || category === 'CONSUMABLE' ? 'IN_CLINIC' : 'PATIENTS');
 
 /** E-08 … E-17: the catalogue. Items come from the medicine list or are custom; pack units have fixed factors. */
 export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust: boolean }) {
@@ -40,7 +44,8 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
   const [items, setItems] = useState<Item[]>([]);
   const [adding, setAdding] = useState(false);
   const [masters, setMasters] = useState<Master[]>([]);
-  const [draft, setDraft] = useState({ masterId: null as string | null, displayName: '', category: 'MEDICINE', baseUnit: 'TABLET' });
+  const [draft, setDraft] = useState({ masterId: null as string | null, displayName: '', category: 'MEDICINE', baseUnit: 'TABLET', useFor: 'PATIENTS' as UseFor });
+  const [use, setUse] = useState<'ALL' | 'PATIENTS' | 'IN_CLINIC'>('ALL');
   const [open, setOpen] = useState<Item | null>(null);
   const [stockFilter, setStockFilter] = useState<StockFilter>('ALL');
   const [history, setHistory] = useState<{ items: Movement[]; next: string | null }>({ items: [], next: null });
@@ -77,7 +82,7 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
   async function openAdd() {
     setError(null);
     setAdding(true);
-    setDraft({ masterId: null, displayName: '', category: 'MEDICINE', baseUnit: 'TABLET' });
+    setDraft({ masterId: null, displayName: '', category: 'MEDICINE', baseUnit: 'TABLET', useFor: 'PATIENTS' });
     const r = await api<{ items: Master[] }>('/api/dispensary/master?limit=200');
     if (r.ok) setMasters(r.body.items);
   }
@@ -91,7 +96,7 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
     const [kind, id] = v.split(':');
     if (kind === 'item') { setAdding(false); void reopen(id); return; }
     const m = masters.find((x) => x.id === id);
-    if (m) setDraft({ masterId: m.id, displayName: m.brandName, category: 'MEDICINE', baseUnit: m.suggestedBaseUnit ?? 'TABLET' });
+    if (m) setDraft({ ...draft, masterId: m.id, displayName: m.brandName, category: 'MEDICINE', baseUnit: m.suggestedBaseUnit ?? 'TABLET' });
   }
   async function create(e: FormEvent) {
     e.preventDefault();
@@ -128,7 +133,9 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
   const needle = q.trim().toLowerCase();
   const stockMatch = (i: Item) => stockFilter === 'ALL' || (stockFilter === 'LOW' && i.stock?.lowStock)
     || (stockFilter === 'NEAR' && i.stock?.nearExpiry) || (stockFilter === 'EXPIRED' && (i.stock?.expiredBase ?? 0) > 0);
-  const shown = items.filter((i) => (cat === 'ALL' || i.category === cat) && stockMatch(i) && (!needle || i.displayName.toLowerCase().includes(needle)));
+  const useMatch = (i: Item, u: typeof use) => u === 'ALL' || i.useFor === u || i.useFor === 'BOTH';
+  const inUse = items.filter((i) => useMatch(i, use));
+  const shown = inUse.filter((i) => (cat === 'ALL' || i.category === cat) && stockMatch(i) && (!needle || i.displayName.toLowerCase().includes(needle)));
   const low = items.filter((i) => i.stock?.lowStock).length;
   const near = items.filter((i) => i.stock?.nearExpiry).length;
   const expired = items.filter((i) => (i.stock?.expiredBase ?? 0) > 0).length;
@@ -141,11 +148,13 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
         <KpiCard label={t.nearExpiryBadge} value={near} tone={near ? 'amber' : 'ink'} />
         <KpiCard label={t.expiredBadge} value={expired} tone={expired ? 'red' : 'ink'} />
       </div>
+      <FilterPills value={use} onChange={setUse} options={(['ALL', 'PATIENTS', 'IN_CLINIC'] as const).map((u) => (
+        { key: u, label: t.use[u], count: items.filter((i) => useMatch(i, u)).length }))} />
       <div className="flex flex-wrap items-center gap-3">
         <SearchField value={q} onChange={setQ} placeholder="Search items by name…" className="w-full md:w-80" />
         <FilterPills value={cat} onChange={setCat} options={[
-          { key: 'ALL', label: 'All', count: items.length },
-          ...CATEGORIES.map((c) => ({ key: c, label: label(c), count: items.filter((i) => i.category === c).length })),
+          { key: 'ALL', label: 'All', count: inUse.length },
+          ...CATEGORIES.map((c) => ({ key: c, label: label(c), count: inUse.filter((i) => i.category === c).length })),
         ]} />
  <FilterPills value={stockFilter} onChange={setStockFilter} options={[
           { key: 'ALL', label: t.allStock },
@@ -162,7 +171,7 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
       <div className="card overflow-hidden">
         <DataList rows={shown} rowKey={(i) => i.id} empty={items.length ? 'No item matches.' : 'No items yet. Add the first one.'} onRowClick={(i) => reopen(i.id)} columns={[
           { key: 'name', header: 'Item', primary: true, cell: (i) => (
-            <span><span className="block font-semibold text-ink">{i.displayName}</span><span className="block text-micro text-muted">{label(i.category)} · {i.baseUnit.toLowerCase()}</span></span>) },
+            <span><span className="block font-semibold text-ink">{i.displayName}</span><span className="block text-micro text-muted">{label(i.category)} · {i.baseUnit.toLowerCase()}{use === 'ALL' ? ` · ${t.use[i.useFor]}` : ''}</span></span>) },
           { key: 'balance', header: t.balance, align: 'right', cell: (i) => (
             <span className="block text-right">
               <span className="block font-semibold tnum text-ink">{unitWord(i.stock?.onHandBase ?? 0, i.baseUnit)}</span>
@@ -194,11 +203,14 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
           <p className="text-micro text-muted">{t.custom}</p>
           <form onSubmit={create} className="space-y-3" noValidate>
             <TextField label={t.displayName} value={draft.displayName} maxLength={120} onChange={(e) => setDraft({ ...draft, displayName: e.target.value })} />
-            <SelectField label={t.category} value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
+            <SelectField label={t.category} value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value, useFor: defaultUse(e.target.value) })}>
               {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
             </SelectField>
             <SelectField label={t.baseUnit} value={draft.baseUnit} onChange={(e) => setDraft({ ...draft, baseUnit: e.target.value })}>
               {BASE_UNITS.map((c) => <option key={c}>{c}</option>)}
+            </SelectField>
+            <SelectField label={t.useFor} hint={t.useForHint} value={draft.useFor} onChange={(e) => setDraft({ ...draft, useFor: e.target.value as UseFor })}>
+              {USES.map((u) => <option key={u} value={u}>{t.use[u]}</option>)}
             </SelectField>
             {error && <p role="alert" className="text-small text-bad">{error}</p>}
             <Button type="submit" variant="brutal">{en.settings.save}</Button>
@@ -254,6 +266,9 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
               )}
               {history.next && <Button className="mt-2" onClick={() => loadHistory(open.id, history.next)}>{t.loadMore}</Button>}
             </section>
+            <SelectField label={t.useFor} hint={t.useForHint} value={open.useFor} disabled={!canEdit} onChange={(e) => patch({ useFor: e.target.value })}>
+              {USES.map((u) => <option key={u} value={u}>{t.use[u]}</option>)}
+            </SelectField>
             <label className="flex items-center gap-2 text-small">
               <input type="checkbox" checked={open.requiresPrescription} disabled={!canEdit || open.requiresPrescriptionImposed}
                 onChange={(e) => patch({ requiresPrescription: e.target.checked })} /> {t.rxRequired}
