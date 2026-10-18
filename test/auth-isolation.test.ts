@@ -51,6 +51,8 @@ import { GET as dGrns, POST as dGrnPost } from '../app/api/dispensary/goods-rece
 import { GET as dGrn, PATCH as dGrnPatch } from '../app/api/dispensary/goods-receipts/[id]/route';
 import { POST as dGrnPostIt } from '../app/api/dispensary/goods-receipts/[id]/post/route';
 import { POST as dGrnDiscard } from '../app/api/dispensary/goods-receipts/[id]/discard/route';
+import { GET as dAdjs, POST as dAdjPost } from '../app/api/dispensary/adjustments/route';
+import { GET as dAdj } from '../app/api/dispensary/adjustments/[id]/route';
 import { GET as dStatement } from '../app/api/dispensary/reports/stock-statement/route';
 import { POST as dReadBill } from '../app/api/dispensary/goods-receipts/read-bill/route';
 import { PATCH as dUnitPatch } from '../app/api/dispensary/items/[id]/units/[unitId]/route';
@@ -155,6 +157,8 @@ const HANDLERS: Record<string, Record<string, unknown>> = {
   '/api/dispensary/goods-receipts/[id]': { GET: dGrn, PATCH: dGrnPatch },
   '/api/dispensary/goods-receipts/[id]/post': { POST: dGrnPostIt },
   '/api/dispensary/goods-receipts/[id]/discard': { POST: dGrnDiscard },
+  '/api/dispensary/adjustments': { GET: dAdjs, POST: dAdjPost },
+  '/api/dispensary/adjustments/[id]': { GET: dAdj },
   '/api/dispensary/reports/stock-statement': { GET: dStatement },
   '/api/dispensary/suppliers': { GET: dSuppliers, POST: dSuppliersPost },
   '/api/dispensary/suppliers/[id]': { GET: dSupplier, PATCH: dSupplierPatch },

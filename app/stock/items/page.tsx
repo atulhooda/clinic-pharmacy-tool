@@ -12,7 +12,7 @@ export default async function Page() {
     <div>
       <PageHeader eyebrow="Stock" title="Items" subtitle="Everything you stock, from the medicine list or your own. Pack sizes are fixed once added." />
       <div className="mt-6">
-        <ItemsPanel canEdit={session.permissions.has('stock.items')} />
+        <ItemsPanel canEdit={session.permissions.has('stock.items')} canAdjust={session.permissions.has('stock.adjust')} />
       </div>
     </div>
   );

@@ -15,16 +15,17 @@ import { en } from '@/lib/i18n/en';
 import { fmtPaise } from '@/lib/money';
 import { api } from '@/components/settings/client';
 import { dmy, istDateTime, movementLabel, packs, unitWord } from './format';
+import { AdjustStockSheet } from './AdjustStockSheet';
 
 const t = en.stock;
 type Unit = { id: string; name: string; baseUnitsPerUnit: number; isBase: boolean; dispensable: boolean; purchasable: boolean; active: boolean };
 type Stock = { onHandBase: number; dispensableBase: number; quarantinedBase: number; expiredBase: number; nearestExpiry: string | null;
   lowStock: boolean; nearExpiry: boolean };
-type BatchRow = { id: string; batchNo: string; expiryDate: string; expired: boolean; mrpPaise: number; mrpUnitName: string; onHandBase: number;
+type BatchRow = { id: string; premisesId: string; batchNo: string; expiryDate: string; expired: boolean; mrpPaise: number; mrpUnitName: string; onHandBase: number;
   locations: { locationId: string; name: string; kind: string; onHandBase: number }[] };
-type Item = { id: string; masterId: string | null; displayName: string; category: string; baseUnit: string; scheduleFlags: string[]; extraScheduleFlags: string[];
+type Item = { id: string; masterId: string | null; displayName: string; category: string; baseUnit: string; trackBatches: boolean; scheduleFlags: string[]; extraScheduleFlags: string[];
   requiresPrescription: boolean; requiresPrescriptionImposed: boolean; reorderLevel: number | null; rackLocation: string | null; units?: Unit[];
-  stock?: Stock & { batches?: BatchRow[]; untracked?: { locationId: string; name: string; kind: string; onHandBase: number }[] } };
+  stock?: Stock & { batches?: BatchRow[]; untracked?: { premisesId: string; locationId: string; name: string; kind: string; onHandBase: number }[] } };
 type Movement = { id: string; type: string; qtyDelta: number; locationName: string; batchNo: string | null; actorLabel: string; occurredAt: string; reasonCode: string | null };
 type StockFilter = 'ALL' | 'LOW' | 'NEAR' | 'EXPIRED';
 type Master = { id: string; brandName: string; dosageForm: string; suggestedBaseUnit: string | null; salts: { name: string }[] };
@@ -33,7 +34,7 @@ const BASE_UNITS = ['TABLET', 'CAPSULE', 'ML', 'G', 'VIAL', 'UNIT', 'PIECE'];
 const FLAGS = ['H', 'H1', 'X', 'G', 'NDPS', 'H2'];
 
 /** E-08 … E-17: the catalogue. Items come from the medicine list or are custom; pack units have fixed factors. */
-export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
+export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust: boolean }) {
   const [q, setQ] = useState('');
   const [cat, setCat] = useState<'ALL' | string>('ALL');
   const [items, setItems] = useState<Item[]>([]);
@@ -45,6 +46,7 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
   const [history, setHistory] = useState<{ items: Movement[]; next: string | null }>({ items: [], next: null });
   const [unit, setUnit] = useState({ name: '', per: '' });
   const [error, setError] = useState<string | null>(null);
+  const [adjusting, setAdjusting] = useState<Item | null>(null);
   const load = useCallback(async (text: string) => {
     const r = await api<{ items: Item[] }>(`/api/dispensary/items?limit=200${text ? `&q=${encodeURIComponent(text)}` : ''}`);
     if (r.ok) setItems(r.body.items);
@@ -58,6 +60,17 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
     const r = await api<Item>(`/api/dispensary/items/${id}`);
     if (r.ok) setOpen(r.body);
     await loadHistory(id, null);
+  };
+
+  const startAdjust = async (id: string) => {
+    const r = await api<Item>(`/api/dispensary/items/${id}`);
+    if (r.ok) setAdjusting(r.body);
+  };
+  const adjusted = async () => {
+    const id = adjusting?.id;
+    setAdjusting(null);
+    await load('');
+    if (id && open?.id === id) await reopen(id);
   };
 
   /** Every medicine in one dropdown: the clinic's own items first, then the medicine list. */
@@ -163,6 +176,10 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
             <span className="flex flex-wrap gap-1">{i.scheduleFlags.length ? i.scheduleFlags.map((f) => <Badge key={f} tone="warn">{f}</Badge>) : <span className="text-faint">—</span>}</span>) },
           { key: 'rx', header: 'Prescription', cell: (i) => (i.requiresPrescription ? <Badge tone="bad">● Required</Badge> : <span className="text-faint">—</span>) },
           { key: 'reorder', header: 'Reorder at', align: 'right', phoneHidden: true, cell: (i) => <span className="tnum">{i.reorderLevel ?? '—'}</span> },
+          ...(canAdjust ? [{ key: 'adjust', header: '', align: 'right' as const, cell: (i: Item) => (
+            <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+              <Button onClick={() => void startAdjust(i.id)}>{t.adjust.short}</Button>
+            </span>) }] : []),
         ]} />
       </div>
       <Sheet open={adding} onOpenChange={setAdding} title={t.addItem} wide>
@@ -191,7 +208,10 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
       <Sheet open={open !== null} onOpenChange={(o) => !o && setOpen(null)} title={open?.displayName ?? ''} wide>
         {open && (
           <div className="space-y-5">
-            <p className="text-small text-muted">{open.category} · {open.baseUnit}</p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-small text-muted">{open.category} · {open.baseUnit}</p>
+              {canAdjust && <Button variant="brutal-blue" onClick={() => setAdjusting(open)}>{t.adjust.button}</Button>}
+            </div>
             <section className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <KpiCard label={t.balance} value={packs(open.stock?.onHandBase ?? 0, open.baseUnit, open.units)} />
@@ -273,6 +293,7 @@ export function ItemsPanel({ canEdit }: { canEdit: boolean }) {
           </div>
         )}
       </Sheet>
+      <AdjustStockSheet item={adjusting} onClose={() => setAdjusting(null)} onDone={() => void adjusted()} />
     </div>
   );
 }
