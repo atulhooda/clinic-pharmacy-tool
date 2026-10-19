@@ -54,9 +54,18 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
   const [error, setError] = useState<string | null>(null);
   const [adjusting, setAdjusting] = useState<Item | null>(null);
   const [detailing, setDetailing] = useState<PendingStock | null>(null);
+  // Every item, page by page: the API returns at most 200 at a time (the clinic has more).
   const load = useCallback(async (text: string) => {
-    const r = await api<{ items: Item[] }>(`/api/dispensary/items?limit=200${text ? `&q=${encodeURIComponent(text)}` : ''}`);
-    if (r.ok) setItems(r.body.items);
+    const out: Item[] = [];
+    let cursor: string | null = null;
+    do {
+      const r: { ok: boolean; body: { items: Item[]; nextCursor: string | null } } =
+        await api(`/api/dispensary/items?limit=200${text ? `&q=${encodeURIComponent(text)}` : ''}${cursor ? `&cursor=${cursor}` : ''}`);
+      if (!r.ok) return;
+      out.push(...r.body.items);
+      cursor = r.body.nextCursor;
+    } while (cursor);
+    setItems(out);
   }, []);
   useEffect(() => { void load(''); }, [load]);
   const loadHistory = async (id: string, cursor: string | null) => {

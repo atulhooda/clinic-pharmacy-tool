@@ -18,7 +18,6 @@ export interface NavItem {
 }
 
 export const NAV: readonly NavItem[] = [
-  { key: 'today', href: '/', icon: 'today', label: 'Today', match: ['/'] },
   { key: 'stock', href: '/stock/items', icon: 'box', label: 'Stock', permission: 'stock.view', match: ['/stock/items'] },
   // Receiving and suppliers are one place: deliveries come from suppliers (founder, 2026-10-19).
   { key: 'receive', href: '/stock/receive', icon: 'inbox', label: 'Receive', permission: 'stock.view', match: ['/stock/receive', '/stock/suppliers'] },

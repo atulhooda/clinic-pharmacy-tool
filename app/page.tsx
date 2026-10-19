@@ -27,6 +27,8 @@ export default async function Home() {
   if (session?.mustChangePassword) redirect('/account/password');
   if (session?.deviceId && !session.hasSwitchPin) redirect('/account/switch-pin');
   if (!session) return <SignedOut available={available} />;
+  // The founder (2026-10-19): no Today page; people who keep stock start on the Stock page.
+  if (session.permissions.has('stock.view')) redirect('/stock/items');
 
   const [sum, recent] = await Promise.all([
     todaySummary(session),
