@@ -10,6 +10,7 @@ import { asAppIn, asOwnerIn, batch, grant, post, snapshot, stockWorld, type Stoc
 import { setClockForTests } from '../lib/clock';
 import { POST as adjPost, GET as adjList } from '../app/api/dispensary/adjustments/route';
 import { GET as adjGet } from '../app/api/dispensary/adjustments/[id]/route';
+import { POST as detailsPost } from '../app/api/dispensary/adjustments/batch-details/route';
 import { GET as itemGet } from '../app/api/dispensary/items/[id]/route';
 import { GET as hintGet } from '../app/api/dispensary/items/[id]/batch-hint/route';
 import { POST as grnsPost } from '../app/api/dispensary/goods-receipts/route';
@@ -177,6 +178,31 @@ test('D-55: a count with no batch details goes on one placeholder batch per item
     assert.equal((await adjust(w, { lines: [{ itemId: w.glv.id, pendingDetails: true, countedBase: 1 }] })).body.code, 'BATCH_NOT_TRACKED');
     assert.equal((await adjust(w, { lines: [{ itemId: w.pcm.id, pendingDetails: true, batchId: first.body.lines[0].batchId, countedBase: 1 }] })).body.code, 'FIELD_INVALID');
     assert.equal((await asOwnerIn(w.org.orgId, "UPDATE batches SET details_pending = false WHERE org_id = $1", [w.org.orgId]))?.code, '23514', 'the placeholder stays a placeholder');
+  } finally {
+    setClockForTests(null);
+  }
+});
+
+test('D-55 batch details: pending stock moves onto its real batch, part or all; expired goes to quarantine; never more than is pending', async () => {
+  setClockForTests(T0);
+  try {
+    const w = await stockWorld('adj9');
+    await adjust(w, { lines: [{ itemId: w.pcm.id, pendingDetails: true, countedBase: 30 }] });
+    const details = async (body: Record<string, unknown>) => w.owner.call(detailsPost, { body: { premisesId: w.main.id, itemId: w.pcm.id, mrpUnitId: w.pcm.packUnitId, mrpPaise: 4500, ...body },
+      headers: { 'reauth-grant': await grant(w.owner, w.aa, 'stock.adjust', w.main.id), 'idempotency-key': randomUUID() } });
+    const part = await details({ batchNo: 'p-1', expiry: '06/2028', qtyBase: 20 });
+    assert.equal(part.status, 201, JSON.stringify(part.body));
+    assert.deepEqual([part.body.reasonCode, part.body.lines.map((l: { qtyDelta: number; batchNo: string }) => [l.qtyDelta, l.batchNo])],
+      ['BATCH_DETAILS_RECORDED', [[-20, 'DETAILS PENDING'], [20, 'P-1']]]);
+    assert.equal((await details({ batchNo: 'p-2', expiry: '06/2028', qtyBase: 11 })).body.code, 'INSUFFICIENT_STOCK', 'only 10 are pending');
+    assert.equal((await details({ batchNo: 'Details Pending', expiry: '06/2028' })).body.code, 'BATCH_NO_RESERVED');
+    const rest = await details({ batchNo: 'old-9', expiry: '08/2026' });
+    assert.deepEqual(rest.body.lines.map((l: { qtyDelta: number; locationName: string }) => l.qtyDelta), [-10, 10]);
+    const item = (await w.owner.call(itemGet, { params: { id: w.pcm.id } })).body;
+    assert.deepEqual([item.stock.onHandBase, item.stock.detailsPending, item.stock.quarantinedBase], [30, false, 10], 'the expired batch went to quarantine');
+    assert.equal((await details({ batchNo: 'p-3', expiry: '06/2028' })).body.code, 'NO_PENDING_STOCK');
+    assert.equal((await w.reception.call(detailsPost, { body: { premisesId: w.main.id, itemId: w.pcm.id, mrpUnitId: w.pcm.packUnitId, mrpPaise: 4500, batchNo: 'x', expiry: '06/2028' },
+      headers: { 'idempotency-key': randomUUID() } })).status, 403);
   } finally {
     setClockForTests(null);
   }

@@ -222,6 +222,69 @@ export async function adjustStock(s: Session, input: AdjustInput, grantId: strin
   });
 }
 
+export interface BatchDetailsInput {
+  premisesId: string;
+  itemId: string;
+  batch: NewBatch;
+  /** How much of the pending stock is this batch, in base units; all of it when null. */
+  qtyBase: number | null;
+}
+
+/**
+ * D-55: the details of stock held as "details pending" are read off the pack. One signed document
+ * moves that quantity from the placeholder onto the real batch (created if new): two count
+ * corrections, −n on the placeholder and +n on the batch, with the reason BATCH_DETAILS_RECORDED.
+ * Expired stock lands in quarantine (D-14). Repeat it for each batch on the shelf.
+ */
+export async function recordBatchDetails(s: Session, input: BatchDetailsInput, grantId: string | undefined): Promise<string> {
+  requirePremises(s, input.premisesId);
+  return withStockTx(s, async (db) => {
+    const locations = await premisesReady(db, s.orgId, input.premisesId);
+    await consumeGrant(db, s, 'stock.adjust', input.premisesId, grantId);
+    const item = (await db.rows<ItemInfo>(
+      `SELECT i.id, i.track_batches AS "trackBatches", i.active,
+              coalesce(i.custom_manufacturer_name, m.manufacturer_name) AS "mfrName",
+              coalesce(i.custom_manufacturer_address, m.manufacturer_address) AS "mfrAddress"
+         FROM items i LEFT JOIN medicine_master m ON m.id = i.master_id WHERE i.org_id = $1 AND i.id = $2`, [s.orgId, input.itemId]))[0];
+    if (!item) throw new HttpError(404, 'ITEM_NOT_FOUND', 'No such item.');
+    const pending = (await db.rows<{ id: string }>(
+      'SELECT id FROM batches WHERE org_id = $1 AND premises_id = $2 AND item_id = $3 AND details_pending IS TRUE', [s.orgId, input.premisesId, input.itemId]))[0];
+    if (!pending) throw new HttpError(404, 'NO_PENDING_STOCK', 'This item has no stock waiting for batch details here.');
+    const unit = (await db.rows('SELECT 1 FROM item_units WHERE org_id = $1 AND item_id = $2 AND id = $3', [s.orgId, input.itemId, input.batch.mrpUnitId]))[0];
+    if (!unit) throw new HttpError(404, 'UNIT_NOT_FOUND', 'No such unit of that item.');
+    const exp = parseExpiry(input.batch.expiry)!;
+    const expired = exp.date < todayIst();
+    const store = locations.find((x) => x.isDefault);
+    const to = expired ? locations.find((x) => x.kind === 'QUARANTINE') : store;
+    if (!store || !to) throw new HttpError(409, 'PREMISES_NOT_CONFIGURED', 'This premises has no store set up.');
+    await lockBalances(db, s.orgId, [{ itemId: input.itemId, locationId: store.id }, { itemId: input.itemId, locationId: to.id }]);
+    const onHand = (await db.rows<{ n: number }>(
+      'SELECT on_hand AS n FROM stock_balances WHERE org_id = $1 AND item_id = $2 AND batch_id = $3 AND location_id = $4', [s.orgId, input.itemId, pending.id, store.id]))[0]?.n ?? 0;
+    const qty = input.qtyBase ?? onHand;
+    if (qty <= 0) throw new HttpError(409, 'NO_PENDING_STOCK', 'This item has no stock waiting for batch details here.');
+    if (qty > onHand) throw new HttpError(409, 'INSUFFICIENT_STOCK', 'That is more than the stock waiting for details.');
+    const real = (await resolveBatch(db, s.orgId, { premisesId: input.premisesId, itemId: input.itemId, batchNo: input.batch.batchNo, expiryDate: exp.date,
+      expiryAsPrinted: exp.printed, mrpPaise: input.batch.mrpPaise, mrpUnitId: input.batch.mrpUnitId, manufacturerName: item.mfrName, manufacturerAddress: item.mfrAddress })).id;
+    const at = now();
+    const reason = 'BATCH_DETAILS_RECORDED';
+    const header = (await db.rows<{ id: string }>(
+      `INSERT INTO stock_adjustments (org_id, premises_id, kind, reason_code, note, created_by, occurred_at, recorded_at)
+       VALUES ($1, $2, 'STOCKTAKE_ADJUSTMENT', $3, NULL, $4, $5, $5) RETURNING id`, [s.orgId, input.premisesId, reason, s.staffUserId, at]))[0].id;
+    const moves: MovementInput[] = [];
+    for (const [i, [batchId, locationId, delta]] of ([[pending.id, store.id, -qty], [real, to.id, qty]] as const).entries()) {
+      const line = (await db.rows<{ id: string }>(
+        `INSERT INTO stock_adjustment_lines (org_id, premises_id, adjustment_id, line_no, item_id, batch_id, location_id, qty_delta)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, [s.orgId, input.premisesId, header, i + 1, input.itemId, batchId, locationId, delta]))[0].id;
+      moves.push({ premisesId: input.premisesId, itemId: input.itemId, batchId, locationId, type: 'STOCKTAKE_ADJUSTMENT', qtyDelta: delta,
+        referenceType: 'STOCK_ADJUSTMENT_LINE', referenceId: line, reasonCode: reason });
+    }
+    await postMovements(db, { orgId: s.orgId, staffUserId: s.staffUserId, name: s.name }, { occurredAt: at, recordedAt: at }, moves);
+    await writeAudit(db, { orgId: s.orgId, action: 'stock.adjusted', actorLabel: s.name, actorRole: s.roleKey, staffUserId: s.staffUserId,
+      sessionId: s.sid, deviceId: s.deviceId, entityId: header, detail: { kind: 'stocktake_adjustment', count: 2, reason: 'batch_details_recorded' } });
+    return header;
+  });
+}
+
 // ---------------------------------------------------------------- reads
 
 export interface BatchHint {

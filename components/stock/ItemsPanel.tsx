@@ -5,7 +5,7 @@ import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import DataList from '@/components/ui/DataList';
 import Sheet from '@/components/ui/Sheet';
-import { TextField, SelectField } from '@/components/ui/Field';
+import { TextField, SelectField, TextareaField } from '@/components/ui/Field';
 import FilterPills from '@/components/ui/FilterPills';
 import SearchField from '@/components/ui/SearchField';
 import KpiCard from '@/components/ui/KpiCard';
@@ -16,6 +16,7 @@ import { fmtPaise } from '@/lib/money';
 import { api } from '@/components/settings/client';
 import { dmy, istDateTime, movementLabel, packs, unitWord } from './format';
 import { AdjustStockSheet } from './AdjustStockSheet';
+import { BatchDetailsSheet, type PendingStock } from './BatchDetailsSheet';
 
 const t = en.stock;
 type Unit = { id: string; name: string; baseUnitsPerUnit: number; isBase: boolean; dispensable: boolean; purchasable: boolean; active: boolean };
@@ -24,7 +25,7 @@ type Stock = { onHandBase: number; dispensableBase: number; quarantinedBase: num
 type BatchRow = { id: string; premisesId: string; detailsPending?: boolean; batchNo: string; expiryDate: string; expired: boolean; mrpPaise: number; mrpUnitName: string; onHandBase: number;
   locations: { locationId: string; name: string; kind: string; onHandBase: number }[] };
 type UseFor = 'PATIENTS' | 'IN_CLINIC' | 'BOTH';
-type Item = { id: string; masterId: string | null; displayName: string; category: string; baseUnit: string; trackBatches: boolean; useFor: UseFor; scheduleFlags: string[]; extraScheduleFlags: string[];
+type Item = { id: string; masterId: string | null; displayName: string; category: string; baseUnit: string; trackBatches: boolean; useFor: UseFor; note: string | null; scheduleFlags: string[]; extraScheduleFlags: string[];
   requiresPrescription: boolean; requiresPrescriptionImposed: boolean; reorderLevel: number | null; rackLocation: string | null; units?: Unit[];
   stock?: Stock & { batches?: BatchRow[]; untracked?: { premisesId: string; locationId: string; name: string; kind: string; onHandBase: number }[] } };
 type Movement = { id: string; type: string; qtyDelta: number; locationName: string; batchNo: string | null; actorLabel: string; occurredAt: string; reasonCode: string | null };
@@ -52,6 +53,7 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
   const [unit, setUnit] = useState({ name: '', per: '' });
   const [error, setError] = useState<string | null>(null);
   const [adjusting, setAdjusting] = useState<Item | null>(null);
+  const [detailing, setDetailing] = useState<PendingStock | null>(null);
   const load = useCallback(async (text: string) => {
     const r = await api<{ items: Item[] }>(`/api/dispensary/items?limit=200${text ? `&q=${encodeURIComponent(text)}` : ''}`);
     if (r.ok) setItems(r.body.items);
@@ -171,7 +173,8 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
       <div className="card overflow-hidden">
         <DataList rows={shown} rowKey={(i) => i.id} empty={items.length ? 'No item matches.' : 'No items yet. Add the first one.'} onRowClick={(i) => reopen(i.id)} columns={[
           { key: 'name', header: 'Item', primary: true, cell: (i) => (
-            <span><span className="block font-semibold text-ink">{i.displayName}</span><span className="block text-micro text-muted">{label(i.category)} · {i.baseUnit.toLowerCase()}{use === 'ALL' ? ` · ${t.use[i.useFor]}` : ''}</span></span>) },
+            <span><span className="block font-semibold text-ink">{i.displayName}</span><span className="block text-micro text-muted">{label(i.category)} · {i.baseUnit.toLowerCase()}{use === 'ALL' ? ` · ${t.use[i.useFor]}` : ''}</span>
+            {i.note && <span className="block text-micro font-medium text-warn">{i.note}</span>}</span>) },
           { key: 'balance', header: t.balance, align: 'right', cell: (i) => (
             <span className="block text-right">
               <span className="block font-semibold tnum text-ink">{unitWord(i.stock?.onHandBase ?? 0, i.baseUnit)}</span>
@@ -234,8 +237,14 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
               {(open.stock?.batches?.length ?? 0) > 0 ? (
                 <div className="card overflow-hidden">
                   <DataList rows={open.stock!.batches!} rowKey={(b) => b.id} empty={t.noStock} columns={[
-                    { key: 'no', header: t.batchNo, primary: true, cell: (b) => (b.detailsPending
-                      ? <Badge tone="warn">{t.detailsPending}</Badge> : <span className="font-semibold">{b.batchNo}</span>) },
+                    { key: 'no', header: t.batchNo, primary: true, cell: (b) => (b.detailsPending ? (
+                      <span className="flex flex-wrap items-center gap-2">
+                        <Badge tone="warn">{t.detailsPending}</Badge>
+                        {canAdjust && b.onHandBase > 0 && (
+                          <Button onClick={() => setDetailing({ itemId: open.id, itemName: open.displayName, baseUnit: open.baseUnit, premisesId: b.premisesId,
+                            pendingBase: b.onHandBase, units: open.units ?? [] })}>{t.details.button}</Button>
+                        )}
+                      </span>) : <span className="font-semibold">{b.batchNo}</span>) },
                     { key: 'exp', header: t.expiry, cell: (b) => (b.detailsPending ? <span className="text-faint">—</span> : (
                       <span className="flex items-center gap-1">{dmy(b.expiryDate)}{b.expired && <Badge tone="bad">{t.expiredBadge}</Badge>}</span>)) },
                     { key: 'mrp', header: t.mrp, align: 'right', cell: (b) => (b.detailsPending ? <span className="text-faint">—</span>
@@ -269,6 +278,8 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
               )}
               {history.next && <Button className="mt-2" onClick={() => loadHistory(open.id, history.next)}>{t.loadMore}</Button>}
             </section>
+            <TextareaField key={`note-${open.id}`} label={t.note} hint={t.noteHint} defaultValue={open.note ?? ''} maxLength={300} rows={2} disabled={!canEdit}
+              onBlur={(e) => { if ((e.target.value.trim() || null) !== open.note) void patch({ note: e.target.value }); }} />
             <SelectField label={t.useFor} hint={t.useForHint} value={open.useFor} disabled={!canEdit} onChange={(e) => patch({ useFor: e.target.value })}>
               {USES.map((u) => <option key={u} value={u}>{t.use[u]}</option>)}
             </SelectField>
@@ -312,6 +323,7 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
         )}
       </Sheet>
       <AdjustStockSheet item={adjusting} onClose={() => setAdjusting(null)} onDone={() => void adjusted()} />
+      <BatchDetailsSheet stock={detailing} onClose={() => setDetailing(null)} onDone={() => { const id = detailing?.itemId; setDetailing(null); void load(''); if (id) void reopen(id); }} />
     </div>
   );
 }

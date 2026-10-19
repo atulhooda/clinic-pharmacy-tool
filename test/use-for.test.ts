@@ -23,3 +23,15 @@ test('D-54: injectables and consumables default to the clinic, the rest to patie
   assert.equal((await w.owner.call(itemPatch, { method: 'PATCH', params: { id: drip.id }, body: { useFor: 'SOMETIMES' } })).status, 422);
   assert.equal((await w.reception.call(itemPatch, { method: 'PATCH', params: { id: drip.id }, body: { useFor: 'PATIENTS' } })).status, 403);
 });
+
+test('D-56: an item carries a short note, set on creation, changed or cleared later, shown in the list', async () => {
+  const w = await stockWorld('note1');
+  const peel = await createItem(w.owner, { category: 'CONSUMABLE', displayName: 'Peel note1', baseUnit: 'PIECE', trackBatches: false, useFor: 'IN_CLINIC', note: 'Enter the quantity (sheet: 10 ML)' });
+  const get = async () => (await w.owner.call(itemGet, { params: { id: peel.id } })).body.note;
+  assert.equal(await get(), 'Enter the quantity (sheet: 10 ML)');
+  const listed = (await w.owner.call(itemsGet, { path: '/api/dispensary/items?use=IN_CLINIC' })).body.items.find((i: { id: string }) => i.id === peel.id);
+  assert.equal(listed.note, 'Enter the quantity (sheet: 10 ML)');
+  assert.equal((await w.owner.call(itemPatch, { method: 'PATCH', params: { id: peel.id }, body: { note: '  ' } })).status, 200);
+  assert.equal(await get(), null, 'a blank note clears it');
+  assert.equal((await w.owner.call(itemPatch, { method: 'PATCH', params: { id: peel.id }, body: { note: 'x'.repeat(301) } })).status, 422);
+});

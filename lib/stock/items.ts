@@ -42,6 +42,8 @@ export interface ItemView {
   baseUnit: BaseUnit;
   trackBatches: boolean;
   useFor: UseFor;
+  /** D-56: what the clinic still has to do about the item. */
+  note: string | null;
   extraScheduleFlags: string[];
   scheduleFlags: string[];
   requiresPrescription: boolean;
@@ -56,7 +58,7 @@ export interface ItemView {
 }
 const ITEM_SELECT = `
   SELECT i.id, i.master_id AS "masterId", i.category, i.display_name AS "displayName", i.base_unit AS "baseUnit",
-         i.track_batches AS "trackBatches", ${USE_FOR_SQL} AS "useFor", i.extra_schedule_flags AS "extraScheduleFlags",
+         i.track_batches AS "trackBatches", ${USE_FOR_SQL} AS "useFor", i.note, i.extra_schedule_flags AS "extraScheduleFlags",
          ARRAY(SELECT DISTINCT f FROM unnest(coalesce(m.schedule_flags, '{}') || i.extra_schedule_flags) f ORDER BY f) AS "scheduleFlags",
          i.requires_prescription AS "requiresPrescription",
          (coalesce(m.requires_prescription, false) OR 'X' = ANY (coalesce(m.schedule_flags, '{}') || i.extra_schedule_flags)) AS "requiresPrescriptionImposed",
@@ -154,6 +156,7 @@ export interface ItemCreate {
   baseUnit: BaseUnit;
   trackBatches?: boolean;
   useFor?: UseFor;
+  note?: string | null;
   extraScheduleFlags?: string[];
   requiresPrescription?: boolean;
   customManufacturerName?: string | null;
@@ -196,12 +199,12 @@ export async function createItem(s: Session, input: ItemCreate): Promise<ItemDet
     const item = (await db.rows<{ id: string }>(
       `INSERT INTO items (org_id, master_id, category, display_name, base_unit, track_batches, extra_schedule_flags, requires_prescription,
                           custom_manufacturer_name, custom_manufacturer_address, hsn_code_override, storage_condition,
-                          reorder_level, reorder_qty, rack_location, use_for, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $17, $16, $16) RETURNING id`,
+                          reorder_level, reorder_qty, rack_location, use_for, note, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $17, $18, $16, $16) RETURNING id`,
       [s.orgId, input.masterId ?? null, input.category, input.displayName.trim(), input.baseUnit,
         input.trackBatches ?? input.category !== 'CONSUMABLE', extra, rx, input.customManufacturerName ?? null,
         input.customManufacturerAddress ?? null, input.hsnCodeOverride ?? null, input.storageCondition ?? null,
-        input.reorderLevel ?? null, input.reorderQty ?? null, input.rackLocation ?? null, at, input.useFor ?? null]).catch(uniqueConflict))[0];
+        input.reorderLevel ?? null, input.reorderQty ?? null, input.rackLocation ?? null, at, input.useFor ?? null, input.note?.trim() || null]).catch(uniqueConflict))[0];
     await db.rows(`INSERT INTO item_units (org_id, item_id, name, base_units_per_unit, is_base, created_at) VALUES ($1, $2, $3, 1, true, $4)`,
       [s.orgId, item.id, input.baseUnit.toLowerCase(), at]);
     await writeAudit(db, { orgId: s.orgId, action: 'item.created', actorLabel: s.name, actorRole: s.roleKey,
@@ -217,7 +220,7 @@ const PATCH_MAP: Record<keyof ItemPatch, string> = {
   category: 'category', displayName: 'display_name', extraScheduleFlags: 'extra_schedule_flags', requiresPrescription: 'requires_prescription',
   customManufacturerName: 'custom_manufacturer_name', customManufacturerAddress: 'custom_manufacturer_address',
   hsnCodeOverride: 'hsn_code_override', storageCondition: 'storage_condition', reorderLevel: 'reorder_level',
-  reorderQty: 'reorder_qty', rackLocation: 'rack_location', active: 'active', useFor: 'use_for',
+  reorderQty: 'reorder_qty', rackLocation: 'rack_location', active: 'active', useFor: 'use_for', note: 'note',
 };
 
 /** E-15: everything but the item's identity. */
@@ -227,6 +230,7 @@ export async function patchItem(s: Session, id: string, input: ItemPatch): Promi
     if (!cur) throw notFound();
     const next = { ...cur, ...Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) } as ItemView;
     if (input.displayName !== undefined) next.displayName = input.displayName.trim();
+    if (input.note !== undefined) next.note = input.note?.trim() || null;
     const keys = (Object.keys(PATCH_MAP) as (keyof ItemPatch)[]).filter((k) => input[k] !== undefined
       && JSON.stringify((next as unknown as Record<string, unknown>)[k]) !== JSON.stringify((cur as unknown as Record<string, unknown>)[k]));
     if (keys.length === 0) return;

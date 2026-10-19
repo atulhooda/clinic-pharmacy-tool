@@ -43,6 +43,7 @@ const ITEM_COMMON = {
   reorderQty: { type: 'int', min: 1, max: 10_000_000, nullable: true },
   rackLocation: { type: 'string', max: 40, nullable: true },
   useFor: { type: 'string', pattern: enumPattern(USE_FOR) },
+  note: { type: 'string', max: 300, nullable: true },
 } as const satisfies Record<string, Rule>;
 
 export const ITEM_CREATE = {
