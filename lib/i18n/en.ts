@@ -236,6 +236,8 @@ export const en = {
       saved: 'Stock updated.',
       expiredToQuarantine: 'This batch has expired, so it goes to quarantine, not the shelf.',
       nothing: 'That matches what is recorded.',
+      needCount: 'Enter how many you counted.',
+      needBatch: 'For a new batch, fill in (they are printed on the pack):',
     },
     movement: {
       OPENING_BALANCE: 'Opening stock',

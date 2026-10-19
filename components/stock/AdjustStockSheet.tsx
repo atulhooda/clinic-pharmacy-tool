@@ -70,12 +70,14 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
   async function save(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    if (countedBase === null) return setError(en.settings.failed);
+    if (countedBase === null) return setError(t.needCount);
     if (!opening && reason === 'OTHER' && !note.trim()) return setError(t.noteRequired);
     const line: Record<string, unknown> = { itemId: item!.id, countedBase };
     if (tracked && isNew) {
       const mrpPaise = parseRupees(nb.mrp);
-      if (!nb.batchNo.trim() || !nb.expiry.trim() || !mrpPaise) return setError(en.settings.failed);
+      // Name every box that is missing, not "try again": a new batch needs all three (they are on the pack).
+      const missing = [!nb.batchNo.trim() && t.batchNo, !/^\d{1,2}\s*[/-]\s*(\d{2}|\d{4})$/.test(nb.expiry.trim()) && t.expiry, !mrpPaise && t.mrp].filter(Boolean);
+      if (missing.length) return setError(`${t.needBatch} ${missing.join(', ')}.`);
       line.newBatch = { batchNo: nb.batchNo, expiry: nb.expiry, mrpPaise, mrpUnitId: nb.mrpUnitId };
     } else if (tracked) {
       line.batchId = batchId;
@@ -114,7 +116,7 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
         {isNew && (
           <div className="grid grid-cols-2 gap-3">
             <TextField label={t.batchNo} value={nb.batchNo} maxLength={40} onChange={(e) => setNb({ ...nb, batchNo: e.target.value })} />
-            <TextField label={t.expiry} value={nb.expiry} placeholder="06/2028" maxLength={10} onChange={(e) => setNb({ ...nb, expiry: e.target.value })} />
+            <TextField label={t.expiry} value={nb.expiry} placeholder="MM/YYYY" maxLength={10} onChange={(e) => setNb({ ...nb, expiry: e.target.value })} />
             <TextField label={t.mrp} inputMode="decimal" value={nb.mrp} onChange={(e) => setNb({ ...nb, mrp: e.target.value })} />
             <SelectField label={t.mrpPer} value={nb.mrpUnitId} onChange={(e) => setNb({ ...nb, mrpUnitId: e.target.value })}>
               {units.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
