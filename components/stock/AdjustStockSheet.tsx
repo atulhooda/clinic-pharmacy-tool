@@ -12,7 +12,7 @@ import { dmy, packs, parseRupees, unitWord } from './format';
 
 const t = en.stock.adjust;
 type Unit = { id: string; name: string; baseUnitsPerUnit: number; isBase: boolean; active: boolean };
-type Batch = { id: string; premisesId: string; batchNo: string; expiryDate: string; expired: boolean; mrpPaise: number; mrpUnitName: string; onHandBase: number;
+type Batch = { id: string; premisesId: string; batchNo: string; expiryDate: string; expired: boolean; mrpPaise: number; mrpUnitName: string; onHandBase: number; detailsPending?: boolean;
   locations: { kind: string; onHandBase: number }[] };
 export type AdjustItem = { id: string; displayName: string; baseUnit: string; trackBatches: boolean; units?: Unit[];
   stock?: { batches?: Batch[]; untracked?: { premisesId: string; kind: string; onHandBase: number }[] } };
@@ -73,16 +73,22 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
   const factor = units.find((u) => u.id === unitId)?.baseUnitsPerUnit ?? 1;
   const n = /^\d+$/.test(count.trim()) ? Number(count.trim()) : null;
   const countedBase = n === null ? null : n * factor;
-  const batch = batches.find((b) => b.id === batchId);
+  // D-55: a new batch whose details are not to hand is held on the item's placeholder ("details pending").
+  const pendingBatch = batches.find((b) => b.detailsPending);
+  const draftBatch = batches.find((b) => b.id === batchId);
+  const isNew0 = tracked && batchId === NEW;
+  const has = { batchNo: !!nb.batchNo.trim(), expiry: EXPIRY.test(nb.expiry.trim()), mrp: !!parseRupees(nb.mrp) };
+  const complete = has.batchNo && has.expiry && has.mrp;
+  const toPending = isNew0 && !complete && !editing;
+  // Counting onto an existing placeholder is a correction of it, not new stock.
+  const batch = toPending && pendingBatch ? pendingBatch : draftBatch;
+  const isNew = isNew0 && !(toPending && pendingBatch);
   // What the count replaces: the batch at the store, or in quarantine once it has expired (where the server counts it).
   const recorded = tracked ? (batch?.locations ?? []).filter((l) => (l.kind === 'QUARANTINE') === !!batch?.expired).reduce((a, l) => a + l.onHandBase, 0)
     : (item.stock?.untracked ?? []).filter((u) => u.premisesId === premisesId && u.kind !== 'QUARANTINE').reduce((a, u) => a + u.onHandBase, 0);
-  const isNew = tracked && batchId === NEW;
   // A new batch, or an untracked item with nothing yet, has no history: opening stock, no reason.
   const opening = isNew || (!tracked && recorded === 0 && !(item.stock?.untracked ?? []).some((u) => u.premisesId === premisesId));
   const delta = countedBase === null ? null : countedBase - recorded;
-  const has = { batchNo: !!nb.batchNo.trim(), expiry: EXPIRY.test(nb.expiry.trim()), mrp: !!parseRupees(nb.mrp) };
-  const complete = has.batchNo && has.expiry && has.mrp;
   const unitName = (id: string) => units.find((u) => u.id === id)?.name ?? '';
 
   async function save(e: FormEvent) {
@@ -91,9 +97,13 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
     if (countedBase === null) return setError(t.needCount);
     if (!opening && reason === 'OTHER' && !note.trim()) return setError(t.noteRequired);
     const line: Record<string, unknown> = { itemId: item!.id, countedBase };
-    if (isNew) {
+    if (toPending && pendingBatch) {
+      line.batchId = pendingBatch.id;
+    } else if (toPending) {
+      line.pendingDetails = true;
+    } else if (isNew) {
       const missing = [!has.batchNo && t.batchNo, !has.expiry && t.expiry, !has.mrp && t.mrp].filter(Boolean);
-      if (missing.length) { setEditing(true); return setError(`${t.needBatch} ${missing.join(', ')}.`); }
+      if (missing.length) return setError(`${t.needBatch} ${missing.join(', ')}.`);
       line.newBatch = { batchNo: nb.batchNo, expiry: nb.expiry, mrpPaise: parseRupees(nb.mrp), mrpUnitId: nb.mrpUnitId };
     } else if (tracked) {
       line.batchId = batchId;
@@ -137,22 +147,28 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
           <SelectField label={t.batch} value={batchId} onChange={(e) => setBatchId(e.target.value)}>
             {batches.map((b) => (
               <option key={b.id} value={b.id}>
-                {b.batchNo} · {dmy(b.expiryDate)} · {fmtPaise(b.mrpPaise)}/{b.mrpUnitName} · {packs(b.onHandBase, item.baseUnit, item.units)}
+                {b.detailsPending ? t.pendingLabel : `${b.batchNo} · ${dmy(b.expiryDate)} · ${fmtPaise(b.mrpPaise)}/${b.mrpUnitName}`} · {packs(b.onHandBase, item.baseUnit, item.units)}
               </option>
             ))}
             <option value={NEW}>{t.newBatch}</option>
           </SelectField>
         )}
-        {isNew && complete && !editing && (
+        {isNew0 && complete && !editing && (
           <p className="text-small text-muted">
             {t.batchNo} <span className="text-ink">{nb.batchNo}</span> · {t.expires} <span className="text-ink">{nb.expiry}</span> · MRP <span className="text-ink">₹{nb.mrp}/{unitName(nb.mrpUnitId)}</span>
             {hint && <> · {t.fromBill} {hint.invoiceNo}</>}{' '}
             <button type="button" className="font-semibold text-brand underline" onClick={() => setEditing(true)}>{t.edit}</button>
           </p>
         )}
-        {isNew && (!complete || editing) && (
+        {toPending && (
+          <p className="text-small text-muted">
+            {t.pendingNote}{' '}
+            <button type="button" className="font-semibold text-brand underline" onClick={() => setEditing(true)}>{t.addDetails}</button>
+          </p>
+        )}
+        {isNew0 && editing && (
           <div className="space-y-2">
-            <p className="text-small text-muted">{hint && !editing ? t.notOnBill : t.fromPack}</p>
+            <p className="text-small text-muted">{t.fromPack}</p>
             <div className="grid grid-cols-2 gap-3">
               {field('batchNo') && <TextField label={t.batchNo} value={nb.batchNo} maxLength={40} onChange={(e) => setNb({ ...nb, batchNo: e.target.value })} />}
               {field('expiry') && <TextField label={t.expiry} value={nb.expiry} placeholder="MM/YYYY" maxLength={10} onChange={(e) => setNb({ ...nb, expiry: e.target.value })} />}

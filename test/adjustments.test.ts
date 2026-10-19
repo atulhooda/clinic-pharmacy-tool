@@ -158,3 +158,26 @@ test('D-53 batch hint: a count reuses the batch, expiry and MRP of the newest bi
   assert.deepEqual((await hint(w.second.id)).body, { hint: null }, 'another premises has its own bills');
   assert.equal((await w.reception.call(hintGet, { params: { id: w.pcm.id }, path: `/api/dispensary/items/${w.pcm.id}/batch-hint?premisesId=${w.second.id}` })).body.code, 'PREMISES_NOT_FOUND');
 });
+
+test('D-55: a count with no batch details goes on one placeholder batch per item, shown as pending, never expiring; its number is reserved', async () => {
+  setClockForTests(T0);
+  try {
+    const w = await stockWorld('adj8');
+    const first = await adjust(w, { lines: [{ itemId: w.pcm.id, pendingDetails: true, countedBase: 30 }] });
+    assert.equal(first.status, 201, JSON.stringify(first.body));
+    assert.deepEqual([first.body.kind, first.body.lines[0].qtyDelta, first.body.lines[0].batchNo], ['OPENING_BALANCE', 30, 'DETAILS PENDING']);
+    // A second count without details lands on the same placeholder: a correction of the difference.
+    const again = await adjust(w, { reasonCode: 'COUNT_CORRECTION', lines: [{ itemId: w.pcm.id, pendingDetails: true, countedBase: 25 }] });
+    assert.deepEqual([again.status, again.body.kind, again.body.lines[0].qtyDelta, again.body.lines[0].batchId], [201, 'STOCKTAKE_ADJUSTMENT', -5, first.body.lines[0].batchId]);
+    const item = (await w.owner.call(itemGet, { params: { id: w.pcm.id } })).body;
+    assert.deepEqual([item.stock.onHandBase, item.stock.detailsPending, item.stock.nearExpiry, item.stock.nearestExpiry, item.stock.batches.map((b: { detailsPending: boolean }) => b.detailsPending)],
+      [25, true, false, null, [true]]);
+    // Nobody can take the reserved number for a real batch, by count or by delivery.
+    assert.equal((await adjust(w, { lines: [{ itemId: w.pcm.id, newBatch: { batchNo: 'details  pending', expiry: '06/2028', mrpPaise: 4500, mrpUnitId: w.pcm.packUnitId }, countedBase: 1 }] })).body.code, 'BATCH_NO_RESERVED');
+    assert.equal((await adjust(w, { lines: [{ itemId: w.glv.id, pendingDetails: true, countedBase: 1 }] })).body.code, 'BATCH_NOT_TRACKED');
+    assert.equal((await adjust(w, { lines: [{ itemId: w.pcm.id, pendingDetails: true, batchId: first.body.lines[0].batchId, countedBase: 1 }] })).body.code, 'FIELD_INVALID');
+    assert.equal((await asOwnerIn(w.org.orgId, "UPDATE batches SET details_pending = false WHERE org_id = $1", [w.org.orgId]))?.code, '23514', 'the placeholder stays a placeholder');
+  } finally {
+    setClockForTests(null);
+  }
+});

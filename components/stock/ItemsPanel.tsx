@@ -20,8 +20,8 @@ import { AdjustStockSheet } from './AdjustStockSheet';
 const t = en.stock;
 type Unit = { id: string; name: string; baseUnitsPerUnit: number; isBase: boolean; dispensable: boolean; purchasable: boolean; active: boolean };
 type Stock = { onHandBase: number; dispensableBase: number; quarantinedBase: number; expiredBase: number; nearestExpiry: string | null;
-  lowStock: boolean; nearExpiry: boolean };
-type BatchRow = { id: string; premisesId: string; batchNo: string; expiryDate: string; expired: boolean; mrpPaise: number; mrpUnitName: string; onHandBase: number;
+  lowStock: boolean; nearExpiry: boolean; detailsPending?: boolean };
+type BatchRow = { id: string; premisesId: string; detailsPending?: boolean; batchNo: string; expiryDate: string; expired: boolean; mrpPaise: number; mrpUnitName: string; onHandBase: number;
   locations: { locationId: string; name: string; kind: string; onHandBase: number }[] };
 type UseFor = 'PATIENTS' | 'IN_CLINIC' | 'BOTH';
 type Item = { id: string; masterId: string | null; displayName: string; category: string; baseUnit: string; trackBatches: boolean; useFor: UseFor; scheduleFlags: string[]; extraScheduleFlags: string[];
@@ -179,6 +179,7 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
                 {i.stock?.lowStock && <Badge tone="warn">{t.lowStock}</Badge>}
                 {i.stock?.nearExpiry && <Badge tone="warn">{t.nearExpiryBadge}</Badge>}
                 {(i.stock?.expiredBase ?? 0) > 0 && <Badge tone="bad">{t.expiredBadge}</Badge>}
+                {i.stock?.detailsPending && <Badge tone="warn">{t.detailsPending}</Badge>}
               </span>
             </span>) },
           { key: 'flags', header: t.scheduleFlags, cell: (i) => (
@@ -233,10 +234,12 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
               {(open.stock?.batches?.length ?? 0) > 0 ? (
                 <div className="card overflow-hidden">
                   <DataList rows={open.stock!.batches!} rowKey={(b) => b.id} empty={t.noStock} columns={[
-                    { key: 'no', header: t.batchNo, primary: true, cell: (b) => <span className="font-semibold">{b.batchNo}</span> },
-                    { key: 'exp', header: t.expiry, cell: (b) => (
-                      <span className="flex items-center gap-1">{dmy(b.expiryDate)}{b.expired && <Badge tone="bad">{t.expiredBadge}</Badge>}</span>) },
-                    { key: 'mrp', header: t.mrp, align: 'right', cell: (b) => <span className="tnum">{fmtPaise(b.mrpPaise)} / {b.mrpUnitName}</span> },
+                    { key: 'no', header: t.batchNo, primary: true, cell: (b) => (b.detailsPending
+                      ? <Badge tone="warn">{t.detailsPending}</Badge> : <span className="font-semibold">{b.batchNo}</span>) },
+                    { key: 'exp', header: t.expiry, cell: (b) => (b.detailsPending ? <span className="text-faint">—</span> : (
+                      <span className="flex items-center gap-1">{dmy(b.expiryDate)}{b.expired && <Badge tone="bad">{t.expiredBadge}</Badge>}</span>)) },
+                    { key: 'mrp', header: t.mrp, align: 'right', cell: (b) => (b.detailsPending ? <span className="text-faint">—</span>
+                      : <span className="tnum">{fmtPaise(b.mrpPaise)} / {b.mrpUnitName}</span>) },
                     { key: 'on', header: t.onHand, align: 'right', cell: (b) => (
                       <span className="block text-right">
                         <span className="block tnum font-semibold">{packs(b.onHandBase, open.baseUnit, open.units)}</span>

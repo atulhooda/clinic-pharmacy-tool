@@ -72,7 +72,7 @@ async function unitsOf(db: Db, orgId: string, itemId: string): Promise<Unit[]> {
                           FROM item_units WHERE org_id = $1 AND item_id = $2 ORDER BY base_units_per_unit, lower(name)`, [orgId, itemId]);
 }
 
-const EMPTY_STOCK: StockSummary = { onHandBase: 0, dispensableBase: 0, quarantinedBase: 0, expiredBase: 0, nearestExpiry: null, lowStock: false, nearExpiry: false };
+const EMPTY_STOCK: StockSummary = { onHandBase: 0, dispensableBase: 0, quarantinedBase: 0, expiredBase: 0, nearestExpiry: null, lowStock: false, nearExpiry: false, detailsPending: false };
 
 function flag(q: URLSearchParams, name: string): boolean {
   const v = q.get(name);

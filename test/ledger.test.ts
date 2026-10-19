@@ -468,7 +468,7 @@ test('E-12 / E-14 (D-47): each item shows its balance; dispensable excludes expi
     await post(w, [{ type: 'RECEIPT', qtyDelta: 10, itemId: exact.id, batchId: null }]);
     const list = (await w.owner.call(itemsGet, { path: `/api/dispensary/items?premisesId=${w.main.id}` })).body.items as { id: string; stock: Record<string, unknown> }[];
     const pcm = list.find((i) => i.id === w.pcm.id)!;
-    assert.deepEqual(pcm.stock, { onHandBase: 49, dispensableBase: 19, quarantinedBase: 15, expiredBase: 27, nearestExpiry: '2026-10-20', lowStock: true, nearExpiry: true });
+    assert.deepEqual(pcm.stock, { onHandBase: 49, dispensableBase: 19, quarantinedBase: 15, expiredBase: 27, nearestExpiry: '2026-10-20', lowStock: true, nearExpiry: true, detailsPending: false });
     assert.equal(list.find((i) => i.id === exact.id)!.stock.lowStock, false, 'at the level is not below it');
     assert.deepEqual(list.find((i) => i.id === w.glv.id)!.stock.onHandBase, 250);
     const only = async (qs: string) => ((await w.owner.call(itemsGet, { path: `/api/dispensary/items?${qs}` })).body.items as { id: string }[]).map((i) => i.id);

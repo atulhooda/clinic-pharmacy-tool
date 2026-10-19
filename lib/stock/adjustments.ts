@@ -35,6 +35,8 @@ export interface CountLine {
   newBatch: NewBatch | null;
   locationId: string | null;
   countedBase: number;
+  /** D-55: no batch number, expiry or MRP to hand: hold the count on the item's placeholder batch. */
+  pendingDetails: boolean;
 }
 export interface AdjustInput {
   premisesId: string;
@@ -46,7 +48,7 @@ export interface AdjustInput {
 const MAX_LINES = 100;
 const MAX_COUNT = 2_000_000_000;
 const MAX_PAISE = 10_000_000_000;
-const LINE_KEYS = new Set(['itemId', 'batchId', 'newBatch', 'locationId', 'countedBase']);
+const LINE_KEYS = new Set(['itemId', 'batchId', 'newBatch', 'locationId', 'countedBase', 'pendingDetails']);
 const BATCH_KEYS = new Set(['batchNo', 'expiry', 'mrpPaise', 'mrpUnitId']);
 
 const bad = (field: string, rule: string) => new HttpError(422, 'FIELD_INVALID', `${field} is not valid.`, { field, rule });
@@ -81,7 +83,11 @@ export function parseCountLines(raw: unknown): CountLine[] {
     }
     const batchId = o.batchId === undefined || o.batchId === null ? null : uuid(o.batchId, `${at}.batchId`);
     if (batchId && newBatch) throw new HttpError(422, 'FIELD_INVALID', 'Name an existing batch or a new one, not both.', { field: `${at}.newBatch`, rule: 'exclusive' });
-    return { itemId: uuid(o.itemId, `${at}.itemId`), batchId, newBatch, locationId: o.locationId === undefined || o.locationId === null ? null : uuid(o.locationId, `${at}.locationId`), countedBase: counted };
+    if (o.pendingDetails !== undefined && typeof o.pendingDetails !== 'boolean') throw bad(`${at}.pendingDetails`, 'bool');
+    const pendingDetails = o.pendingDetails === true;
+    if (pendingDetails && (batchId || newBatch)) throw new HttpError(422, 'FIELD_INVALID', 'A count with details pending names no batch.', { field: `${at}.pendingDetails`, rule: 'exclusive' });
+    return { itemId: uuid(o.itemId, `${at}.itemId`), batchId, newBatch, locationId: o.locationId === undefined || o.locationId === null ? null : uuid(o.locationId, `${at}.locationId`),
+      countedBase: counted, pendingDetails };
   });
 }
 
@@ -96,6 +102,19 @@ async function premisesReady(db: Db, orgId: string, premisesId: string): Promise
 }
 
 const notFound = () => new HttpError(404, 'ADJUSTMENT_NOT_FOUND', 'No such adjustment.');
+
+/** D-55: the item's placeholder batch at the premises (one per item and premises), created on first use. */
+async function pendingBatch(db: Db, orgId: string, premisesId: string, itemId: string): Promise<string> {
+  const find = async () => (await db.rows<{ id: string }>(
+    `SELECT id FROM batches WHERE org_id = $1 AND premises_id = $2 AND item_id = $3 AND details_pending IS TRUE`, [orgId, premisesId, itemId]))[0]?.id;
+  const found = await find();
+  if (found) return found;
+  const ins = await db.rows<{ id: string }>(
+    `INSERT INTO batches (org_id, premises_id, item_id, batch_no, expiry_date, mrp_paise, mrp_unit_id, details_pending)
+     SELECT $1, $2, $3, 'DETAILS PENDING', DATE '2099-12-31', 1, u.id, true FROM item_units u WHERE u.org_id = $1 AND u.item_id = $3 AND u.is_base
+     ON CONFLICT ON CONSTRAINT batches_number_key DO NOTHING RETURNING id`, [orgId, premisesId, itemId]);
+  return ins[0]?.id ?? (await find())!;
+}
 
 /** E-34 POST (count kinds): count lines → one OPENING_BALANCE or STOCKTAKE_ADJUSTMENT document. */
 export async function adjustStock(s: Session, input: AdjustInput, grantId: string | undefined): Promise<string> {
@@ -138,10 +157,12 @@ export async function adjustStock(s: Session, input: AdjustInput, grantId: strin
           batchId = (await resolveBatch(db, s.orgId, { premisesId: input.premisesId, itemId: l.itemId, batchNo: l.newBatch.batchNo, expiryDate: exp.date,
             expiryAsPrinted: exp.printed, mrpPaise: l.newBatch.mrpPaise, mrpUnitId: l.newBatch.mrpUnitId, manufacturerName: item.mfrName, manufacturerAddress: item.mfrAddress })).id;
           expired = exp.date < today;
+        } else if (l.pendingDetails) {
+          batchId = await pendingBatch(db, s.orgId, input.premisesId, l.itemId);
         } else {
           throw new HttpError(422, 'BATCH_DETAILS_REQUIRED', 'Pick the batch you counted, or add its batch number, expiry and MRP.', { lineNo });
         }
-      } else if (l.batchId || l.newBatch) {
+      } else if (l.batchId || l.newBatch || l.pendingDetails) {
         throw new HttpError(422, 'BATCH_NOT_TRACKED', 'This item is not batch-tracked; leave the batch empty.', { lineNo });
       }
       // A named location must be this premises' and working; otherwise the default store, or

@@ -144,6 +144,9 @@ export async function withStockTx<T>(s: Session, fn: (db: Db) => Promise<T>): Pr
   }
 }
 
+/** D-55: the batch number of an item's placeholder batch (details pending). */
+export const PENDING_BATCH_NO = 'DETAILS PENDING';
+
 /** Batch numbers are stored trimmed, with single spaces, in upper case. */
 export const normaliseBatchNo = (s: string): string => s.trim().replace(/\s+/g, ' ').toUpperCase();
 
@@ -167,6 +170,8 @@ export interface BatchInput {
  */
 export async function resolveBatch(db: Db, orgId: string, b: BatchInput): Promise<{ id: string; created: boolean }> {
   const batchNo = normaliseBatchNo(b.batchNo);
+  // D-55: the placeholder's number is reserved; a real batch never takes it.
+  if (batchNo === PENDING_BATCH_NO) throw new HttpError(422, 'BATCH_NO_RESERVED', 'That batch number is reserved; enter the number printed on the pack.');
   const params = [orgId, b.premisesId, b.itemId, batchNo, b.expiryDate];
   const find = () => db.rows<{ id: string; mrpPaise: number; mrpUnitId: string; factor: number }>(
     `SELECT bt.id, bt.mrp_paise AS "mrpPaise", bt.mrp_unit_id AS "mrpUnitId", u.base_units_per_unit AS factor
@@ -218,6 +223,8 @@ export interface StockSummary {
   nearestExpiry: string | null;
   lowStock: boolean;
   nearExpiry: boolean;
+  /** D-55: some stock is on a placeholder batch whose details are still to be read off the pack. */
+  detailsPending: boolean;
 }
 
 /**
@@ -239,7 +246,8 @@ export async function stockSummaries(db: Db, orgId: string, premisesIds: readonl
               coalesce(sum(b.on_hand) FILTER (WHERE l.kind <> 'QUARANTINE' AND (b.batch_id IS NULL OR bt.expiry_date >= $3::date)), 0)::int AS dispensable,
               coalesce(sum(b.on_hand) FILTER (WHERE l.kind = 'QUARANTINE'), 0)::int AS quarantined,
               coalesce(sum(b.on_hand) FILTER (WHERE bt.expiry_date < $3::date), 0)::int AS expired,
-              min(bt.expiry_date) FILTER (WHERE b.on_hand > 0 AND l.kind <> 'QUARANTINE' AND bt.expiry_date >= $3::date) AS nearest
+              min(bt.expiry_date) FILTER (WHERE b.on_hand > 0 AND l.kind <> 'QUARANTINE' AND bt.expiry_date >= $3::date AND bt.details_pending IS NOT TRUE) AS nearest,
+              coalesce(bool_or(bt.details_pending IS TRUE AND b.on_hand > 0), false) AS pending
          FROM stock_balances b
          JOIN scope s ON s.premises_id = b.premises_id
          JOIN stock_locations l ON l.org_id = b.org_id AND l.id = b.location_id
@@ -252,6 +260,7 @@ export async function stockSummaries(db: Db, orgId: string, premisesIds: readonl
             coalesce(sum(bal.quarantined), 0)::int AS "quarantinedBase",
             coalesce(sum(bal.expired), 0)::int AS "expiredBase",
             min(bal.nearest)::text AS "nearestExpiry",
+            coalesce(bool_or(bal.pending), false) AS "detailsPending",
             (i.reorder_level IS NOT NULL AND EXISTS (
                SELECT 1 FROM cfg
                 WHERE coalesce((SELECT b2.dispensable FROM bal b2 WHERE b2.item_id = i.id AND b2.premises_id = cfg.premises_id), 0) < i.reorder_level
@@ -273,6 +282,8 @@ export interface BatchView {
   mrpPaise: number;
   mrpUnitName: string;
   mrpUnitBaseUnits: number;
+  /** D-55: a placeholder; its number, expiry and MRP mean nothing and are not shown. */
+  detailsPending: boolean;
   onHandBase: number;
   locations: { locationId: string; name: string; kind: string; onHandBase: number }[];
 }
@@ -288,7 +299,8 @@ export async function itemStock(db: Db, s: Session, itemId: string): Promise<{ b
       ORDER BY l.is_default DESC, l.kind, lower(l.name)`, [s.orgId, itemId, premises]);
   const batches = await db.rows<Omit<BatchView, 'expired' | 'onHandBase' | 'locations'>>(
     `SELECT bt.id, bt.premises_id AS "premisesId", bt.batch_no AS "batchNo", bt.expiry_date::text AS "expiryDate", bt.expiry_as_printed AS "expiryAsPrinted",
-            bt.mrp_paise AS "mrpPaise", u.name AS "mrpUnitName", u.base_units_per_unit AS "mrpUnitBaseUnits"
+            bt.mrp_paise AS "mrpPaise", u.name AS "mrpUnitName", u.base_units_per_unit AS "mrpUnitBaseUnits",
+            coalesce(bt.details_pending, false) AS "detailsPending"
        FROM batches bt JOIN item_units u ON u.org_id = bt.org_id AND u.id = bt.mrp_unit_id
       WHERE bt.org_id = $1 AND bt.item_id = $2 AND bt.premises_id = ANY($3::uuid[])
       ORDER BY bt.expiry_date, bt.seq`, [s.orgId, itemId, premises]);
