@@ -11,6 +11,9 @@ import { setClockForTests } from '../lib/clock';
 import { POST as adjPost, GET as adjList } from '../app/api/dispensary/adjustments/route';
 import { GET as adjGet } from '../app/api/dispensary/adjustments/[id]/route';
 import { GET as itemGet } from '../app/api/dispensary/items/[id]/route';
+import { GET as hintGet } from '../app/api/dispensary/items/[id]/batch-hint/route';
+import { POST as grnsPost } from '../app/api/dispensary/goods-receipts/route';
+import { POST as suppliersPost } from '../app/api/dispensary/suppliers/route';
 
 const T0 = new Date('2026-10-07T04:30:00Z'); // 2026-10-07 10:00 IST
 
@@ -141,4 +144,17 @@ test('DK-08 / DT-21 / L-1: a replay posts once; no occurredAt; the document and 
   } finally {
     setClockForTests(null);
   }
+});
+
+test('D-53 batch hint: a count reuses the batch, expiry and MRP of the newest bill of the item here; what the bill lacks is null', async () => {
+  const w = await stockWorld('adj7');
+  const hint = async (premisesId = w.main.id) => w.owner.call(hintGet, { params: { id: w.pcm.id }, path: `/api/dispensary/items/${w.pcm.id}/batch-hint?premisesId=${premisesId}` });
+  assert.deepEqual((await hint()).body, { hint: null }, 'no bill yet');
+  const sup = await w.owner.call(suppliersPost, { body: { name: 'Hint Distributors adj7', drugLicenceNumbers: ['20B/AHM/0001'] } });
+  const d = await w.owner.call(grnsPost, { body: { premisesId: w.main.id, supplierId: sup.body.id, invoiceNo: 'C-1', invoiceDate: '2026-10-06',
+    lines: [{ itemId: w.pcm.id, purchaseUnitId: w.pcm.packUnitId, qty: 2, batchNo: 'b-223', expiry: '12/28', purchaseRatePaise: 1440 }] } });
+  assert.equal(d.status, 201, JSON.stringify(d.body));
+  assert.deepEqual((await hint()).body.hint, { batchNo: 'B-223', expiry: '12/28', mrpPaise: null, mrpUnitId: null, supplierName: 'Hint Distributors adj7', invoiceNo: 'C-1' });
+  assert.deepEqual((await hint(w.second.id)).body, { hint: null }, 'another premises has its own bills');
+  assert.equal((await w.reception.call(hintGet, { params: { id: w.pcm.id }, path: `/api/dispensary/items/${w.pcm.id}/batch-hint?premisesId=${w.second.id}` })).body.code, 'PREMISES_NOT_FOUND');
 });

@@ -17,7 +17,9 @@ type Batch = { id: string; premisesId: string; batchNo: string; expiryDate: stri
 export type AdjustItem = { id: string; displayName: string; baseUnit: string; trackBatches: boolean; units?: Unit[];
   stock?: { batches?: Batch[]; untracked?: { premisesId: string; kind: string; onHandBase: number }[] } };
 type Premises = { id: string; name: string; settings: unknown | null };
+type Hint = { batchNo: string | null; expiry: string | null; mrpPaise: number | null; mrpUnitId: string | null; supplierName: string; invoiceNo: string };
 const NEW = 'new';
+const EXPIRY = /^(\d{1,2}\s*[/-]\s*(\d{2}|\d{4})|\d{4}-\d{2}-\d{2})$/;
 
 /**
  * E-34 (D-53): count what is on the shelf for one batch, and record the difference. A batch with no
@@ -29,6 +31,8 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
   const [premisesId, setPremisesId] = useState('');
   const [batchId, setBatchId] = useState('');
   const [nb, setNb] = useState({ batchNo: '', expiry: '', mrp: '', mrpUnitId: '' });
+  const [hint, setHint] = useState<Hint | null>(null);
+  const [editing, setEditing] = useState(false);
   const [count, setCount] = useState('');
   const [unitId, setUnitId] = useState('');
   const [reason, setReason] = useState('COUNT_CORRECTION');
@@ -39,8 +43,7 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
 
   useEffect(() => {
     if (!item) return;
-    setError(null); setCount(''); setNote(''); setReason('COUNT_CORRECTION'); setKey(newIdempotencyKey());
-    setNb({ batchNo: '', expiry: '', mrp: '', mrpUnitId: (item.units ?? []).find((u) => !u.isBase && u.active)?.id ?? (item.units ?? []).find((u) => u.isBase)?.id ?? '' });
+    setError(null); setCount(''); setNote(''); setReason('COUNT_CORRECTION'); setKey(newIdempotencyKey()); setEditing(false);
     setUnitId((item.units ?? []).find((u) => u.isBase)?.id ?? '');
     void api<{ items: Premises[] }>('/api/dispensary/premises').then((r) => {
       const ready = r.ok ? r.body.items.filter((p) => p.settings) : [];
@@ -52,6 +55,18 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
   const tracked = item?.trackBatches ?? true;
   const batches = (item?.stock?.batches ?? []).filter((b) => b.premisesId === premisesId);
   useEffect(() => { setBatchId(batches[0]?.id ?? NEW); }, [premisesId, item]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A new batch: fill its details from the newest bill of this item, so usually only the quantity is typed.
+  useEffect(() => {
+    if (!item || !premisesId) return;
+    const fallbackUnit = (item.units ?? []).find((u) => !u.isBase && u.active)?.id ?? (item.units ?? []).find((u) => u.isBase)?.id ?? '';
+    setHint(null);
+    setNb({ batchNo: '', expiry: '', mrp: '', mrpUnitId: fallbackUnit });
+    void api<{ hint: Hint | null }>(`/api/dispensary/items/${item.id}/batch-hint?premisesId=${premisesId}`).then((r) => {
+      const h = r.ok ? r.body.hint : null;
+      setHint(h);
+      if (h) setNb({ batchNo: h.batchNo ?? '', expiry: h.expiry ?? '', mrp: h.mrpPaise ? (h.mrpPaise / 100).toFixed(2) : '', mrpUnitId: h.mrpUnitId ?? fallbackUnit });
+    });
+  }, [item, premisesId]);
   if (!item) return null;
 
   const units = (item.units ?? []).filter((u) => u.active);
@@ -66,6 +81,9 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
   // A new batch, or an untracked item with nothing yet, has no history: opening stock, no reason.
   const opening = isNew || (!tracked && recorded === 0 && !(item.stock?.untracked ?? []).some((u) => u.premisesId === premisesId));
   const delta = countedBase === null ? null : countedBase - recorded;
+  const has = { batchNo: !!nb.batchNo.trim(), expiry: EXPIRY.test(nb.expiry.trim()), mrp: !!parseRupees(nb.mrp) };
+  const complete = has.batchNo && has.expiry && has.mrp;
+  const unitName = (id: string) => units.find((u) => u.id === id)?.name ?? '';
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -73,12 +91,10 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
     if (countedBase === null) return setError(t.needCount);
     if (!opening && reason === 'OTHER' && !note.trim()) return setError(t.noteRequired);
     const line: Record<string, unknown> = { itemId: item!.id, countedBase };
-    if (tracked && isNew) {
-      const mrpPaise = parseRupees(nb.mrp);
-      // Name every box that is missing, not "try again": a new batch needs all three (they are on the pack).
-      const missing = [!nb.batchNo.trim() && t.batchNo, !/^\d{1,2}\s*[/-]\s*(\d{2}|\d{4})$/.test(nb.expiry.trim()) && t.expiry, !mrpPaise && t.mrp].filter(Boolean);
-      if (missing.length) return setError(`${t.needBatch} ${missing.join(', ')}.`);
-      line.newBatch = { batchNo: nb.batchNo, expiry: nb.expiry, mrpPaise, mrpUnitId: nb.mrpUnitId };
+    if (isNew) {
+      const missing = [!has.batchNo && t.batchNo, !has.expiry && t.expiry, !has.mrp && t.mrp].filter(Boolean);
+      if (missing.length) { setEditing(true); return setError(`${t.needBatch} ${missing.join(', ')}.`); }
+      line.newBatch = { batchNo: nb.batchNo, expiry: nb.expiry, mrpPaise: parseRupees(nb.mrp), mrpUnitId: nb.mrpUnitId };
     } else if (tracked) {
       line.batchId = batchId;
     }
@@ -95,15 +111,29 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
     }
   }
 
+  const field = (k: keyof typeof has) => editing || !has[k];
   return (
     <Sheet open onOpenChange={(o) => !o && onClose()} title={`${t.title}: ${item.displayName}`} description={t.intro}>
-      <form onSubmit={save} className="space-y-3" noValidate>
+      <form onSubmit={save} className="space-y-4" noValidate>
+        <div className="grid grid-cols-2 gap-3">
+          <TextField label={t.counted} inputMode="numeric" autoFocus value={count} onChange={(e) => setCount(e.target.value.replace(/\D/g, ''))} />
+          <SelectField label={t.countedIn} value={unitId} onChange={(e) => setUnitId(e.target.value)}>
+            {units.map((u) => <option key={u.id} value={u.id}>{u.isBase ? u.name : `${u.name} (${u.baseUnitsPerUnit})`}</option>)}
+          </SelectField>
+        </div>
+        <p className="text-small text-muted">
+          {t.recorded}: <span className="tnum text-ink">{unitWord(recorded, item.baseUnit)}</span>
+          {delta !== null && delta !== 0 && (
+            <span className={`tnum font-semibold ${delta < 0 ? 'text-bad' : 'text-ok'}`}> → {delta > 0 ? '+' : ''}{unitWord(delta, item.baseUnit)}</span>
+          )}
+          {delta === 0 && <span> · {t.nothing}</span>}
+        </p>
         {premises.length > 1 && (
           <SelectField label={t.premises} value={premisesId} onChange={(e) => setPremisesId(e.target.value)}>
             {premises.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </SelectField>
         )}
-        {tracked && (
+        {tracked && batches.length > 0 && (
           <SelectField label={t.batch} value={batchId} onChange={(e) => setBatchId(e.target.value)}>
             {batches.map((b) => (
               <option key={b.id} value={b.id}>
@@ -113,38 +143,37 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
             <option value={NEW}>{t.newBatch}</option>
           </SelectField>
         )}
-        {isNew && (
-          <div className="grid grid-cols-2 gap-3">
-            <TextField label={t.batchNo} value={nb.batchNo} maxLength={40} onChange={(e) => setNb({ ...nb, batchNo: e.target.value })} />
-            <TextField label={t.expiry} value={nb.expiry} placeholder="MM/YYYY" maxLength={10} onChange={(e) => setNb({ ...nb, expiry: e.target.value })} />
-            <TextField label={t.mrp} inputMode="decimal" value={nb.mrp} onChange={(e) => setNb({ ...nb, mrp: e.target.value })} />
-            <SelectField label={t.mrpPer} value={nb.mrpUnitId} onChange={(e) => setNb({ ...nb, mrpUnitId: e.target.value })}>
-              {units.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-            </SelectField>
+        {isNew && complete && !editing && (
+          <p className="text-small text-muted">
+            {t.batchNo} <span className="text-ink">{nb.batchNo}</span> · {t.expires} <span className="text-ink">{nb.expiry}</span> · MRP <span className="text-ink">₹{nb.mrp}/{unitName(nb.mrpUnitId)}</span>
+            {hint && <> · {t.fromBill} {hint.invoiceNo}</>}{' '}
+            <button type="button" className="font-semibold text-brand underline" onClick={() => setEditing(true)}>{t.edit}</button>
+          </p>
+        )}
+        {isNew && (!complete || editing) && (
+          <div className="space-y-2">
+            <p className="text-small text-muted">{hint && !editing ? t.notOnBill : t.fromPack}</p>
+            <div className="grid grid-cols-2 gap-3">
+              {field('batchNo') && <TextField label={t.batchNo} value={nb.batchNo} maxLength={40} onChange={(e) => setNb({ ...nb, batchNo: e.target.value })} />}
+              {field('expiry') && <TextField label={t.expiry} value={nb.expiry} placeholder="MM/YYYY" maxLength={10} onChange={(e) => setNb({ ...nb, expiry: e.target.value })} />}
+              {field('mrp') && <TextField label={t.mrp} inputMode="decimal" value={nb.mrp} onChange={(e) => setNb({ ...nb, mrp: e.target.value })} />}
+              {field('mrp') && (
+                <SelectField label={t.mrpPer} value={nb.mrpUnitId} onChange={(e) => setNb({ ...nb, mrpUnitId: e.target.value })}>
+                  {units.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </SelectField>
+              )}
+            </div>
           </div>
         )}
         {batch?.expired && <p className="text-small text-warn">{t.expiredToQuarantine}</p>}
-        <div className="grid grid-cols-2 gap-3">
-          <TextField label={t.counted} inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value.replace(/\D/g, ''))} />
-          <SelectField label={t.countedIn} value={unitId} onChange={(e) => setUnitId(e.target.value)}>
-            {units.map((u) => <option key={u.id} value={u.id}>{u.isBase ? u.name : `${u.name} (${u.baseUnitsPerUnit})`}</option>)}
-          </SelectField>
-        </div>
-        <dl className="grid grid-cols-2 gap-2 text-small">
-          <dt className="text-muted">{t.recorded}</dt><dd className="tnum text-right">{unitWord(recorded, item.baseUnit)}</dd>
-          {delta !== null && (<>
-            <dt className="text-muted">{t.change}</dt>
-            <dd className={`tnum text-right font-semibold ${delta < 0 ? 'text-bad' : delta > 0 ? 'text-ok' : ''}`}>
-              {delta === 0 ? t.nothing : `${delta > 0 ? '+' : ''}${unitWord(delta, item.baseUnit)}`}
-            </dd>
-          </>)}
-        </dl>
-        {opening ? <p className="text-micro text-muted">{t.opening}</p> : (
+        {!opening && delta !== null && delta !== 0 && (
           <SelectField label={t.reason} value={reason} onChange={(e) => setReason(e.target.value)}>
             {Object.entries(t.reasons).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </SelectField>
         )}
-        <TextareaField label={t.note} value={note} maxLength={500} rows={2} onChange={(e) => setNote(e.target.value)} />
+        {!opening && reason === 'OTHER' && (
+          <TextareaField label={t.note} value={note} maxLength={500} rows={2} onChange={(e) => setNote(e.target.value)} />
+        )}
         {error && <p role="alert" className="text-small text-bad">{error}</p>}
         <Button type="submit" variant="brutal-blue" disabled={busy || delta === null || delta === 0 || !premisesId}>{t.save}</Button>
       </form>

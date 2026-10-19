@@ -203,6 +203,48 @@ export async function adjustStock(s: Session, input: AdjustInput, grantId: strin
 
 // ---------------------------------------------------------------- reads
 
+export interface BatchHint {
+  batchNo: string | null;
+  /** As printed on the bill (`MM/YY`, `MM/YYYY`) or `YYYY-MM-DD`. */
+  expiry: string | null;
+  mrpPaise: number | null;
+  mrpUnitId: string | null;
+  supplierName: string;
+  invoiceNo: string;
+}
+
+/**
+ * D-53 (founder, 2026-10-19: "I just want to change the quantity"): the batch details a count can
+ * reuse, from the newest delivery of this item at the premises, posted or still a draft. Whatever a
+ * bill left out stays null, and the screen asks only for that.
+ */
+export async function batchHint(s: Session, itemId: string, premisesId: string): Promise<BatchHint | null> {
+  requirePremises(s, premisesId);
+  return withTenant(s.orgId, async (db) => {
+    if ((await db.rows('SELECT 1 FROM items WHERE org_id = $1 AND id = $2', [s.orgId, itemId])).length === 0) throw new HttpError(404, 'ITEM_NOT_FOUND', 'No such item.');
+    const rows = await db.rows<BatchHint & { at: Date }>(
+      `SELECT * FROM (
+         SELECT l.batch_no AS "batchNo", coalesce(l.expiry_as_printed, l.expiry_date::text) AS expiry, l.mrp_paise AS "mrpPaise", l.mrp_unit_id AS "mrpUnitId",
+                coalesce(g.supplier_name_snapshot, sp.name) AS "supplierName", g.invoice_no AS "invoiceNo", g.posted_at AS at
+           FROM goods_receipt_lines l
+           JOIN goods_receipts g ON g.org_id = l.org_id AND g.id = l.goods_receipt_id
+           JOIN suppliers sp ON sp.org_id = g.org_id AND sp.id = g.supplier_id
+          WHERE l.org_id = $1 AND l.item_id = $2 AND g.premises_id = $3 AND g.status = 'POSTED'
+         UNION ALL
+         SELECT nullif(e->>'batchNo', ''), nullif(e->>'expiry', ''), (e->>'mrpPaise')::bigint, (e->>'mrpUnitId')::uuid,
+                sp.name, g.invoice_no, g.updated_at
+           FROM goods_receipts g
+           JOIN suppliers sp ON sp.org_id = g.org_id AND sp.id = g.supplier_id
+           CROSS JOIN LATERAL jsonb_array_elements(g.draft_lines) e
+          WHERE g.org_id = $1 AND g.premises_id = $3 AND g.status = 'DRAFT' AND e->>'itemId' = $2::text) h
+        ORDER BY (h."batchNo" IS NOT NULL) DESC, h.at DESC LIMIT 1`, [s.orgId, itemId, premisesId]);
+    if (!rows[0]) return null;
+    const { at, ...hint } = rows[0];
+    void at;
+    return { ...hint, mrpPaise: hint.mrpPaise === null ? null : Number(hint.mrpPaise) };
+  });
+}
+
 export interface AdjustmentLineView {
   lineNo: number;
   itemId: string;
