@@ -25,7 +25,7 @@ type Stock = { onHandBase: number; dispensableBase: number; quarantinedBase: num
 type BatchRow = { id: string; premisesId: string; detailsPending?: boolean; batchNo: string; expiryDate: string; expired: boolean; mrpPaise: number; mrpUnitName: string; onHandBase: number;
   locations: { locationId: string; name: string; kind: string; onHandBase: number }[] };
 type UseFor = 'PATIENTS' | 'IN_CLINIC' | 'BOTH';
-type Item = { id: string; masterId: string | null; displayName: string; category: string; baseUnit: string; trackBatches: boolean; useFor: UseFor; note: string | null; scheduleFlags: string[]; extraScheduleFlags: string[];
+type Item = { id: string; masterId: string | null; displayName: string; category: string; baseUnit: string; trackBatches: boolean; useFor: UseFor; note: string | null; active: boolean; scheduleFlags: string[]; extraScheduleFlags: string[];
   requiresPrescription: boolean; requiresPrescriptionImposed: boolean; reorderLevel: number | null; rackLocation: string | null; units?: Unit[];
   stock?: Stock & { batches?: BatchRow[]; untracked?: { premisesId: string; locationId: string; name: string; kind: string; onHandBase: number }[] } };
 type Movement = { id: string; type: string; qtyDelta: number; locationName: string; batchNo: string | null; actorLabel: string; occurredAt: string; reasonCode: string | null };
@@ -42,7 +42,11 @@ const defaultUse = (category: string): UseFor => (category === 'INJECTABLE' || c
 export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust: boolean }) {
   const [q, setQ] = useState('');
   const [cat, setCat] = useState<'ALL' | string>('ALL');
-  const [items, setItems] = useState<Item[]>([]);
+  const [allItems, setItems] = useState<Item[]>([]);
+  const [showRemoved, setShowRemoved] = useState(false);
+  // Removed items (switched off: their history stays) are hidden unless asked for.
+  const items = allItems.filter((i) => showRemoved || i.active);
+  const removed = allItems.filter((i) => !i.active).length;
   const [adding, setAdding] = useState(false);
   const [masters, setMasters] = useState<Master[]>([]);
   const [draft, setDraft] = useState({ masterId: null as string | null, displayName: '', category: 'MEDICINE', baseUnit: 'TABLET', useFor: 'PATIENTS' as UseFor });
@@ -173,6 +177,11 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
           { key: 'NEAR', label: t.nearExpiryBadge, count: near },
           { key: 'EXPIRED', label: t.expiredBadge, count: expired },
         ]} />
+        {removed > 0 && (
+          <button type="button" className="text-small font-semibold text-muted underline" onClick={() => setShowRemoved(!showRemoved)}>
+            {showRemoved ? t.hideRemoved : `${t.showRemoved} (${removed})`}
+          </button>
+        )}
         {canEdit && (
           <Button variant="brutal-blue" className="md:ml-auto" onClick={() => void openAdd()}>
             <IconPlus className="h-4 w-4" /> {t.addItem}
@@ -182,7 +191,7 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
       <div className="card overflow-hidden">
         <DataList rows={shown} rowKey={(i) => i.id} empty={items.length ? 'No item matches.' : 'No items yet. Add the first one.'} onRowClick={(i) => reopen(i.id)} columns={[
           { key: 'name', header: 'Item', primary: true, cell: (i) => (
-            <span><span className="block font-semibold text-ink">{i.displayName}</span><span className="block text-micro text-muted">{label(i.category)} · {i.baseUnit.toLowerCase()}{use === 'ALL' ? ` · ${t.use[i.useFor]}` : ''}</span>
+            <span><span className="block font-semibold text-ink">{i.displayName}{!i.active && <> <Badge tone="bad">{t.removedBadge}</Badge></>}</span><span className="block text-micro text-muted">{label(i.category)} · {i.baseUnit.toLowerCase()}{use === 'ALL' ? ` · ${t.use[i.useFor]}` : ''}</span>
             {i.note && <span className="block text-micro font-medium text-warn">{i.note}</span>}</span>) },
           { key: 'balance', header: t.balance, align: 'right', cell: (i) => (
             <span className="block text-right">
@@ -327,6 +336,14 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
                 </form>
               )}
             </div>
+            {canEdit && (
+              <div className="border-t border-hairline pt-4">
+                {open.active
+                  ? <Button onClick={() => { if (window.confirm(t.removeConfirm)) void patch({ active: false }); }}>{t.remove}</Button>
+                  : <Button onClick={() => void patch({ active: true })}>{t.putBack}</Button>}
+                <p className="mt-1 text-micro text-muted">{t.removeHint}</p>
+              </div>
+            )}
             {error && <p role="alert" className="text-small text-bad">{error}</p>}
           </div>
         )}
