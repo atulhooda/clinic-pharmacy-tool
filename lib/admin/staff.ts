@@ -44,7 +44,7 @@ const SELECT = `
                     WHERE sp.org_id = u.org_id AND sp.staff_user_id = u.id AND sp.active), '{}') AS "premisesIds",
          (SELECT count(*) FROM sessions s WHERE s.org_id = u.org_id AND s.staff_user_id = u.id AND s.revoked_at IS NULL
              AND s.expires_at > $2)::int AS "openSessions"
-    FROM staff_users u WHERE u.org_id = $1`;
+    FROM staff_users u WHERE u.org_id = $1 AND u.system_kind IS NULL`;
 const view = (r: Row): StaffView => ({ ...r, lastSignInAt: r.lastSignInAt?.toISOString() ?? null });
 const notFound = () => new HttpError(404, 'STAFF_NOT_FOUND', 'No such person.');
 const LOGIN = /^[a-z0-9._-]{3,32}$/;
@@ -164,7 +164,7 @@ export async function patchStaff(s: Session, id: string, input: StaffPatch, gran
   await withSessionTx(s, async (db) => {
     const cur = (await db.rows<{ name: string; role: string; phone: string | null; prescriberId: string | null; active: boolean }>(
       `SELECT name, role_key AS role, phone_e164 AS phone, prescriber_id AS "prescriberId", active
-         FROM staff_users WHERE org_id = $1 AND id = $2 FOR UPDATE`, [s.orgId, id]))[0];
+         FROM staff_users WHERE org_id = $1 AND id = $2 AND system_kind IS NULL FOR UPDATE`, [s.orgId, id]))[0];
     if (!cur) throw notFound();
     await consumeGrant(db, s, 'staff.manage', id, grantId);
     const at = now();
@@ -242,7 +242,7 @@ export async function resetStaff(s: Session, id: string, grantId: string | undef
   const otp = oneTimePassword();
   const hash = await hashPassword(otp);
   await withSessionTx(s, async (db) => {
-    const cur = (await db.rows<{ role: string; login: string }>('SELECT role_key AS role, login FROM staff_users WHERE org_id = $1 AND id = $2 FOR UPDATE', [s.orgId, id]))[0];
+    const cur = (await db.rows<{ role: string; login: string }>('SELECT role_key AS role, login FROM staff_users WHERE org_id = $1 AND id = $2 AND system_kind IS NULL FOR UPDATE', [s.orgId, id]))[0];
     if (!cur) throw notFound();
     ownerOnly(s, cur.role);
     await consumeGrant(db, s, 'staff.manage', id, grantId);
@@ -261,7 +261,7 @@ export async function resetStaff(s: Session, id: string, grantId: string | undef
 /** M-08: end every session of this person (no grant needed). */
 export async function revokeStaffSessions(s: Session, id: string): Promise<{ ended: number }> {
   return withSessionTx(s, async (db) => {
-    const cur = await db.rows('SELECT 1 FROM staff_users WHERE org_id = $1 AND id = $2', [s.orgId, id]);
+    const cur = await db.rows('SELECT 1 FROM staff_users WHERE org_id = $1 AND id = $2 AND system_kind IS NULL', [s.orgId, id]);
     if (cur.length === 0) throw notFound();
     const n = await endSessions(db, s.orgId, id, 'owner_revoked');
     await writeAudit(db, { orgId: s.orgId, action: 'staff.sessions_revoked', actorLabel: s.name, actorRole: s.roleKey,

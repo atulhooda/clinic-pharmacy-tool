@@ -1,6 +1,7 @@
 # Spec 06a — Clinic Pharmacy Tool: Design
 
-**Status:** **Rev 6.2 (standalone)**, 2026-10-08. **Milestone 1 is being built** (§19); everything else stays design.
+**Status:** **Rev 6.2 (standalone)**, 2026-10-08, with **D-57 (2026-10-22, the desk ⇄ pharmacy stock sync)** applied in §6.1, §6.7, §12.2, §12.3, §12.5, §17, §18 and §20. **Milestone 1 is being built** (§19); everything else stays design.
+**D-57 written against:** clinic-pharmacy-tool branch `feat/desk-sales` @ `f3da3b6` (local; not fetched in this session, so `origin/main` was not re-checked). It relies on no Ritu Desk code: only the contract the desk calls, restated in §12.5.
 **Written against:** clinic-pharmacy-tool `origin/main` @ `6f5ffb2` (fetched 2026-10-08; README only). Stack conventions from Ritu Desk `origin/main` @ `8bee594` (fetched 2026-10-08; no newer commits).
 **History:** Revisions 4–6 were squashed into one commit when this repo's history was cleaned on 2026-10-08; the revision notes say what each changed. Earlier drafts, from when this was planned as a Ritu Desk module, are kept privately. Rev 4 replaced those drafts (D-24).
 
@@ -1292,6 +1293,15 @@ All five tables are append-only apart from `last_seq` and the status change (tri
 - **Remaining units** = `container_base_units` − Σ draws on non-reversed procedure uses − wastage. That is one table plus a wastage write-off, as decided; the ledger shape is unchanged.
 - **Units never go back into a discarded vial (D-20).** When a procedure use that drew from a container is reversed after the container was `DISCARDED`, the reversal is **automatically paired** with a `DAMAGE_WRITEOFF` of the same quantity, linked to that container. Its reason is `OPENED_CONTAINER_LAPSED`, or `DAMAGED` for an early discard. The record then says what really happened (not used on the patient, but still gone), and the net effect on stock is zero.
 
+**Desk sales and returns (D-57, migration 028).** Not documents of this app (the desk issues the bill), but the record of what each desk line moved:
+- `desk_sale_lines`: one row per bill line, UNIQUE (`org_id`, `bill_id`, `line_key`), carrying the bill's serial and `issued_at`, the requested item, the quantity in base units and the outcome: `POSTED` (fully allocated), `SHORT` (nothing posted; `short_base` and a reason) or `REJECTED` (nothing posted; a reason). A CHECK (`desk_sale_lines_never_partial`) makes a partly allocated line unstorable. A credit note reaching a line that never took stock closes it: `CANCELLED` (reason `credited`). A POSTED or CANCELLED line never changes; a SHORT or REJECTED one changes only by being retried (E-56) or closed by a credit, and a line any credit note has reached never becomes POSTED: a trigger holds all of it.
+- `desk_sale_allocations`: the batches a posted line took, one DISPENSE movement each (reference `DESK_SALE_ALLOCATION`). Append-only.
+- `desk_return_lines`: one row per credit-note line, UNIQUE (`org_id`, `credit_note_id`, `line_key`), always naming its sale line: `RETURNED` or `NOTHING_TO_RETURN`. A credit whose sale has not arrived is never stored. Append-only.
+- `desk_return_allocations`: what each return put back, per sale allocation, one PATIENT_RETURN movement each (reference `DESK_RETURN_ALLOCATION`). Append-only; a trigger (`desk_return_allocations_cap`) refuses more than the sale allocation took, or another batch.
+- `desk_sync_nonces`: the single-use nonces of §12.5, kept (no DELETE for the app role).
+- `stock_movements_reference` admits the two new reference types (widened in place, R11-4).
+- `staff_users.system_kind` (migration 027): NULL for people; `DESK_SYNC` for the "Ritu Desk" actor.
+
 ### 6.8 Platform
 
 - **`idempotency_keys`**: PK (`org_id`, `key`).
@@ -1803,7 +1813,8 @@ A change applies to bills issued after it; issued bills keep their snapshots.
 - **Required:** an `Idempotency-Key` header (8–128 characters, `[A-Za-z0-9_-]`) on every POST/PUT/PATCH. Missing → 400 `IDEMPOTENCY_KEY_REQUIRED`.
 - **Exempt:**
   - `/api/auth/*` and `/api/account/*`, which have their own replay rules: a sign-in or a PIN is never replayed;
-  - the read-only POSTs `dispenses/preview`, `imports/{id}/validate` and `goods-receipts/read-bill` (E-51, D-51).
+  - the read-only POSTs `dispenses/preview`, `imports/{id}/validate` and `goods-receipts/read-bill` (E-51, D-51);
+  - the desk's signed routes `/api/integrations/desk/*` (E-52 … E-54, D-57): no session, so no key row; each sale line is idempotent on (bill, line) and each return line on (credit note, line) in their own tables, and each request's nonce is single-use (§12.5).
 - **Scope:** (`org_id`, key). `request_sha256` is the hash of method + path + canonical body. For a multipart upload, the body is the file's SHA-256 plus the form fields.
 - **Mechanism:** the key row is inserted **first, inside the business transaction.** Postgres makes a concurrent insert of the same key wait on the uncommitted unique entry.
   - If the first request commits, the second **replays**: the original status, the resource re-read from the DB, and the header `Idempotent-Replayed: true`. No new rows are written.
@@ -1929,8 +1940,22 @@ A change applies to bills issued after it; issued bills keep their snapshots.
 | E-49 | `GET /dispensary/credit-notes/{id}?format=&layout=` | `dispense.view` | as E-48 |
 | E-50 | `GET /dispensary/reports/sales-register?premisesId=&from=&to=&format=` | `stock.reports` | D-49, §14. **`premisesId` required**; `format` = `json`, `csv` or `print`; 422 `PERIOD_TOO_LONG` (> 366 days). It holds no patient data, so it needs no signing grant; an export is audited (`report.exported`). |
 | E-51 | `POST /dispensary/goods-receipts/read-bill` (multipart: `file`) | `stock.receive` | D-51. A JPEG, PNG, WebP or PDF of one supplier bill, ≤ 8 MB (413 `FILE_TOO_LARGE`; 422 `UNSUPPORTED_FORMAT`). Returns what was read and the proposed matches (R8-11); **writes nothing**. 503 `BILL_READER_NOT_CONFIGURED` without a key; 502 `BILL_READ_FAILED` when nothing usable comes back. |
+| E-52 | `GET /integrations/desk/items` | the desk's signature (§12.5) | D-57. `{items: [{id, displayName, category, baseUnit, onHandBase, dispensableBase, maxMrpPaisePerBase \| null, active}]}`: active `RETAIL_PRODUCT` items given to patients (`use_for` PATIENTS, BOTH or the default); stock at the env premises: on hand anywhere there, and dispensable = what E-53 can take (default store, unexpired, not a placeholder); the highest MRP per base unit, rounded up, over batches with stock that are not quarantined, expired or placeholders (R11-5). |
+| E-53 | `POST /integrations/desk/sales` | the desk's signature | D-57. `{billId, serial, issuedAt, lines: [{lineKey, itemId, qtyBase}]}` (≤ 200 lines, keys unique: 422 `DUPLICATE_LINE_KEY`) → `{lines: [{lineKey, status, allocatedBase, shortBase, reason \| null}]}`, `status` = `posted` \| `short` \| `rejected` \| `cancelled` (a short or rejected line a credit note reached first; reason `credited`; final). Idempotent per (`billId`, `lineKey`): a stored line answers as it now stands and moves nothing. FEFO (§8) over the env premises' default STORE, leaving out quarantine, expired and placeholder batches; all or nothing per line. Reasons: `insufficient_stock`, `details_pending` (short); `unknown_item`, `not_retail_product`, `not_for_patients`, `item_inactive` (rejected). DISPENSE movements, reference `DESK_SALE_ALLOCATION`, actor "Ritu Desk". |
+| E-54 | `POST /integrations/desk/returns` | the desk's signature | D-57. `{creditNoteId, billId, lines: [{lineKey, qtyBase}]}` → `{lines: [{lineKey, status, returnedBase, reason \| null}]}`, `status` = `returned` \| `nothing_to_return`. Idempotent per (`creditNoteId`, `lineKey`). Puts back up to what the bill line took and has not had back, newest allocation first, as PATIENT_RETURN movements (R11-1, R11-2). Reasons: `more_than_taken` (returned what was left), `not_posted` (the line never took stock: the credit **closes it, CANCELLED**, so it can never be resolved, R11-7), `already_returned`. **A line whose sale has not reached the pharmacy yet → 409 `sale_not_received` for the whole request, storing nothing** (retryable: the desk's outbox has no guaranteed order, R11-8). |
+| E-55 | `GET /dispensary/desk-sales?status=open\|all` | `stock.view` | D-57. The desk's sale lines at the caller's premises, newest first (≤ 200): `open` (default) = short or rejected (never cancelled); with the item, the bill serial and line key, the shortfall and its reason, and `open` (the count). No patient data: the desk sends none. |
+| E-56 | `POST /dispensary/desk-sales/{id}/resolve` | `stock.adjust` (+ grant `stock.adjust` for the line's premises) | D-57. Allocates a short or rejected line again: POSTED (movements in the caller's name), or SHORT with the new shortfall, or REJECTED if the item still cannot be sold. 409 `DESK_SALE_POSTED`; **409 `DESK_SALE_CREDITED` for a line any credit note has reached** (the DB guard refuses it too); 404 `DESK_SALE_NOT_FOUND` (another organisation's or premises' line too). Audited (`stock.desk_sale_resolve`). |
 
 `GET /api/health` is public and returns only `{ok, schemaVerified}`.
+
+### 12.5 The desk ⇄ pharmacy stock sync (D-57)
+
+- **Transport:** the desk's server calls E-52 … E-54 over HTTPS with JSON. No cookie, no session, no Idempotency-Key.
+- **Body:** read with a 256 KB cap (a larger declared or streamed body → 413 `BODY_TOO_LARGE`, the stream cancelled); nothing is parsed and **no database work happens (not even the self-check) until the signature holds**.
+- **Signature:** HMAC-SHA256 with the shared key over `DESK-SYNC-V1\n<METHOD>\n<path+query>\n<ts>\n<nonce>\n<sha256 hex of the raw body>`, sent as `x-desk-ts` (unix seconds), `x-desk-nonce` (a UUID) and `x-desk-signature` (hex). Checked in constant time, before the body is parsed. A missing or wrong signature (or a malformed header) → 401 `bad_signature`; a timestamp more than 120 s from the server's clock → 401 `stale_timestamp`; a nonce already seen → 401 `nonce_reused`. The nonce is stored in the request's own transaction (`desk_sync_nonces`, UNIQUE (`org_id`, `nonce`)), so a request that fails leaves it unused. **Growth (R11-9):** the app role deletes nothing (06b DMG-07), so rows are kept; a row matters only inside the ±120 s window, because a request outside it is refused before its nonce is looked at, so older rows are inert. It is one small row per desk request (bills, credit notes, item-list reads); when the jobs runner (§13) exists, a `pharmacy_jobs` purge of rows older than a day is the place to bound it (a DELETE grant to the jobs role, never to the app role).
+- **The switch** (env only): `DESK_SYNC_KEY` (≥ 32 characters), `DESK_SYNC_ORG_SLUG` and `DESK_SYNC_PREMISES_ID`. Unless all three are set, every `/api/integrations/desk/**` route answers 404 `not_found`, before the self-check gate. **The organisation and premises come only from the env**, never from a request; an unknown or suspended organisation, or a premises that is not set up for stock, → 503 `desk_sync_misconfigured`. The desk's own side (its base URL for this app and its copy of the key) lives in the desk's configuration, never in this repo.
+- **The actor:** a staff row per organisation, "Ritu Desk" (`system_kind = 'DESK_SYNC'`, §6.1), created on first use. It is inactive, has no PINs, phone or prescriber, and a password hash that no password produces; the DB keeps it so (`staff_users_system_unusable`, `staff_users_system_guard`). It never appears on the lock screen or the staff list.
+- **Retries:** the desk retries with backoff until it gets a 200; every retry is safe (idempotent per line). A short line stays short for the desk: the fix happens here (E-56), and the desk's next retry of that bill answers with the line as it now stands.
 
 ### 12.4 Key shapes
 
@@ -2129,11 +2154,11 @@ A change applies to bills issued after it; issued bills keep their snapshots.
     - never: ordering flows, carts, payment links, bills or receipts for medicines;
     - the template does not name the medicine;
     - **hard prerequisite:** recorded opt-in and immediate opt-out, which do not exist yet.
-- **Ritu Desk.** No integration in v1 (D-28). Whether an organisation using both should share one login and sync patients through an API later is 06 OQ-30. Nothing in v1 blocks either: ids are UUIDs, and a link table can be added later without changing existing tables.
+- **Ritu Desk.** One integration (D-57, 2026-10-22): **the desk is the only billing system,** and its issued bills and credit notes move stock here through E-52 … E-54, signed server-to-server calls (§12.5). Nothing more: no shared database, no shared package, no desk code in this repo, and no desk infrastructure details (hosts, keys) in it either. Shared login and patient sync stay out (06 OQ-30); the desk sends no patient data. A premises fed by the desk does not use this app's own patient billing (D-49).
 - **Ritu voice.** No connection. No voice tool reads or changes this app's data.
 - **Ritu Desk Spec 07.** This spec does not depend on it (D-29). Spec 07 stays Ritu Desk work on its own track.
 - **Prescribing.** This app records prescriptions; it never writes one, suggests a drug, or computes a dose or quantity.
-- **Billing (D-49).** A bill per sale and a credit note per return, printed at the counter (§11.5). No payments, dues or refunds are recorded; nothing is filed with GST (§20). Bills are never sent over WhatsApp.
+- **Billing (D-49).** A bill per sale and a credit note per return, printed at the counter (§11.5), at a premises not fed by the desk (D-57). No payments, dues or refunds are recorded; nothing is filed with GST (§20). Bills are never sent over WhatsApp.
 - **AI.** None anywhere in the app (§0.7).
 
 ---
@@ -2199,20 +2224,22 @@ A change applies to bills issued after it; issued bills keep their snapshots.
 | 024 | `items.use_for` (nullable: given to patients, used in the clinic, or both; NULL is the category's default, D-54) | 10b |
 | 025 | `batches.details_pending` (nullable; the placeholder batch for stock counted without batch details, D-55) | 10b |
 | 026 | `items.note` (nullable, ≤ 300 characters: what the clinic still has to do about the item, D-56) | 10b |
-| 027 | `patients` | 6 |
-| 028 | `prescriptions`, `prescription_lines` (+ immutability triggers) | 6 |
-| 029 | `prescription_images` | 6 |
-| 030 | `dispenses` (+ lines, allocations, the L-25 trigger); includes the nullable `LICENSED_PHARMACY` and backdate columns (R6-9) | 9 |
-| 031 | `patient_returns` (+ lines) | 10 |
-| 032 | `stock_reversals` | 10 |
-| 033 | `item_tax_rates` (D-49; was Milestone 2) | 11 |
-| 034 | `billing_series`, `bills`, `bill_lines`, `credit_notes`, `credit_note_lines` (+ the append-only and cancellation triggers); the billing columns on `premises_settings` (nullable, R6-8) | 11 |
-| 035 | `stock_imports`, `stock_import_rows` | 14 |
+| 027 | `staff_users.system_kind` (nullable) + `staff_users_system_unusable`, `staff_users_system_guard`: the "Ritu Desk" system actor (D-57) | desk sync |
+| 028 | `desk_sync_nonces`, `desk_sale_lines`, `desk_sale_allocations`, `desk_return_lines`, `desk_return_allocations` (+ guards); `stock_movements_reference` widened in place (D-57, R11-4) | desk sync |
+| 029 | `patients` | 6 |
+| 030 | `prescriptions`, `prescription_lines` (+ immutability triggers) | 6 |
+| 031 | `prescription_images` | 6 |
+| 032 | `dispenses` (+ lines, allocations, the L-25 trigger); includes the nullable `LICENSED_PHARMACY` and backdate columns (R6-9) | 9 |
+| 033 | `patient_returns` (+ lines) | 10 |
+| 034 | `stock_reversals` | 10 |
+| 035 | `item_tax_rates` (D-49; was Milestone 2) | 11 |
+| 036 | `billing_series`, `bills`, `bill_lines`, `credit_notes`, `credit_note_lines` (+ the append-only and cancellation triggers); the billing columns on `premises_settings` (nullable, R6-8) | 11 |
+| 037 | `stock_imports`, `stock_import_rows` | 14 |
 
 **Milestone 2, numbered when built:** `otp_challenges`, `procedure_types`, `patient_merges` (+ the `patient_canonical` view), `opened_containers` (+ the FK on `stock_adjustment_lines`), `procedure_uses`, `supplier_returns`, `outbox_events`, `ledger_reconciliation_runs`, `master_correction_requests` (+ the `curation_*` policies).
 
 - **Every table is created with the §2.6 keys from the start:** `PRIMARY KEY (org_id, id)`, composite FKs (with `premises_id` where stock is named), and `org_id` in every unique constraint.
-- **Adding to an earlier table** (R6-8): a later migration may add a nullable column, an index, a constraint (`NOT VALID`, then validated) or an FK. It never drops, renames or retypes anything, and the previous app version keeps working (06b DMG-08, DMG-11).
+- **Adding to an earlier table** (R6-8): a later migration may add a nullable column, an index, a constraint (`NOT VALID`, then validated) or an FK. It never drops, renames or retypes anything, and the previous app version keeps working (06b DMG-08, DMG-11). **One exception (D-57, R11-4):** a CHECK may be widened in place, dropped and re-added under the same name, as a CHECK, in one `ALTER TABLE` statement, when it only admits more; the file's header says so.
 - **The `devices` ↔ `sessions` cycle** is broken by `device_state`.
 
 ---
@@ -2236,18 +2263,19 @@ A change applies to bills issued after it; issued bills keep their snapshots.
 | **3** | **The shared PC:** trusted devices, "Who's working?", the idle lock, the switch PIN, the signing PIN with the pepper, re-auth grants (A-08 … A-12, A-14, A-15); **the per-username sign-in limit (D-45)**; the device endpoints M-10, M-11 and their screen (DW-01, DW-15 need them) | 011–012 | DW, DPN-01 … 11, 13 … 17, DN-02 … 05, 22, 23 (D-45), DX-05 … 08, DX-18 |
 | **4** | **Administration:** premises, staff, roles, the audit view (M-01 … M-09, M-12) and their screens; the UI kit copied in (the devices endpoints are built in PR 3) | — | DI (administration rows), DX-09 … 17, DX-19 |
 | **5** | **Catalogue and settings:** the minimal master, stock and premises settings, locations, items and units, suppliers (E-01 … E-09, E-12 … E-18, E-20, E-21) | 013–018 | DG-01 … 03, 05 … 07, 09 … 11 (DG-08 and the dispense halves of DG-05 and DG-09 with PR 9); DX-33 … 37, 39 … 42, 45 |
-| **6** | **People:** patients, prescribers, prescriptions (manual and photo) (P-01 … P-13) | 027–029 | DRX-01 … 16; DX-20 … 31 |
+| **6** | **People:** patients, prescribers, prescriptions (manual and photo) (P-01 … P-13) | 029–031 | DRX-01 … 16; DX-20 … 31 |
 | **7** | **Ledger:** batches, movements, balances, triggers, idempotency (also on the administration writes, 06 R7-2); the catalogue's ledger reads: E-18, E-14's batches and balances, E-12's stock filters (so the Stock page shows each item's **balance**, D-47); `items_freeze` | 019–021 | DL (M1 rows), DP-01 … 07, 10 (DP-08 with PR 10, DP-12 with PR 9); DA; DK-01 … 07, 09, 11; DX-43 |
 | **8** | **Receiving stock** (E-23 … E-26); **the stock statement (E-45, D-47), moved here by D-50,** with print and CSV | 022 | DO-01 … 04; DM-04 … 06; DX-46 … 49; DR-17 … 20 for the movements that exist by then (receipts, opening balances), completed as PRs 9 and 10 add theirs; DX-81 |
 | **8b** | **Reading supplier bills (D-51):** E-51, the matching, the review screen | — | DBR-01 … 08; DX-87 |
-| **9** | **Dispensing:** allocation (FEFO), preview and dispense, the M1 mode rules, `requires_prescription` (E-27 … E-30) | 030 | DE (dispensing rows), DU (except DU-17), DK, DM (M1 rules), DO (dispense rows), DC-01 … 04, 10, 11; DX-50 … 58 |
+| **9** | **Dispensing:** allocation (FEFO), preview and dispense, the M1 mode rules, `requires_prescription` (E-27 … E-30) | 032 | DE (dispensing rows), DU (except DU-17), DK, DM (M1 rules), DO (dispense rows), DC-01 … 04, 10, 11; DX-50 … 58 |
 | **10a** | **Stock by count (D-53):** E-34's count kinds: opening stock on a key with no movement, **stock-count corrections incl. found stock** (D-42), signed; the Adjust stock action on the Stock page | 023 | DE-13; DE-20 (the adjustment from quarantine); DX-62; DK-08 (adjustments); DT-21 (adjustments) |
 | **10b** | **Who an item is for (D-54):** `use_for` on items; the Stock page splits "Given to patients" and "Used in clinic" (BOTH in each); Suppliers moves under Receive; counts without batch details and recording them later (D-55); item notes (D-56) | 024–026 | — (tests in `use-for.test.ts`) |
-| **10** | **Returns and corrections:** patient returns, write-offs, **the write-off kinds of E-34** (the count kinds came early, PR 10a, D-53), reversals (E-32, E-34, E-35) | 031, 032 | DE-10 … 16, 20; DO (return, reversal and adjustment rows); DC-05 … 07; DPN-13; DX-60, 62, 63 |
-| **11** | **Billing (D-49):** GST rates per HSN (E-19); the billing settings on premises (E-06); a bill on every dispense where the premises bills, cancelled with its reversal; credit notes with patient returns; the print views and the bill list (E-47 … E-49); the sales register (E-50) | 033–034 | DU-17; DBL-01 … 16; DX-83 … 86 |
+| **Desk sync** | **The desk ⇄ pharmacy stock sync (D-57):** the system actor, desk sales and returns (E-52 … E-54, signed), the Desk sales page and Retry (E-55, E-56) | 027–028 | DDS-01 … 17 (06b §24.3); DX-88, DX-89 |
+| **10** | **Returns and corrections:** patient returns, write-offs, **the write-off kinds of E-34** (the count kinds came early, PR 10a, D-53), reversals (E-32, E-34, E-35) | 033, 034 | DE-10 … 16, 20; DO (return, reversal and adjustment rows); DC-05 … 07; DPN-13; DX-60, 62, 63 |
+| **11** | **Billing (D-49):** GST rates per HSN (E-19); the billing settings on premises (E-06); a bill on every dispense where the premises bills, cancelled with its reversal; credit notes with patient returns; the print views and the bill list (E-47 … E-49); the sales register (E-50) | 035–036 | DU-17; DBL-01 … 16; DX-83 … 86 |
 | **12** | **Views and registers:** stock overview, low stock, near expiry; the H1 and purchase registers, print and CSV (E-38 … E-40). The stock statement is built in PR 8 (D-50). | — | DR (M1 rows; DR-17 … 20 complete); DX-65 … 68 |
 | **13** | **Insights (D-48):** the page and E-46; the consumption, valuation and non-moving reports | — | DR-08, DR-09, DR-21 … 24; DX-82 |
-| **14** | **CSV import of opening stock** (E-41 … E-44) | 035 | DIM (CSV rows); DX-69 … 72 |
+| **14** | **CSV import of opening stock** (E-41 … E-44) | 037 | DIM (CSV rows); DX-69 … 72 |
 | **15** | **Pilot readiness:** the stock screens finished; an end-to-end "day at one premises" test; a demo seed script | — | the Milestone 1 gate (06b §30) |
 
 Each PR follows the same order: migrations → queries/service → tests → routes → UI.
@@ -2257,7 +2285,7 @@ Each PR follows the same order: migrations → queries/service → tests → rou
 ## 20. Out of scope
 
 - **Integrations:**
-  - **Ritu Desk integration** in v1: shared login, patient sync (06 OQ-30);
+  - **Ritu Desk integration** beyond the stock sync (D-57): shared login, patient sync (06 OQ-30);
   - any link to the Ritu voice server.
 - **Prescribing:**
   - writing or e-signing prescriptions;

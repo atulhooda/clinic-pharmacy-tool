@@ -37,6 +37,8 @@ export const PREMISES_SCOPED_PARENTS = [
   'supplier_returns', 'supplier_return_lines',
   'procedure_uses', 'procedure_use_lines', 'procedure_use_allocations',
   'opened_containers', 'stock_imports',
+  // D-57: the desk's bill and credit-note lines and what they took or put back.
+  'desk_sale_lines', 'desk_sale_allocations', 'desk_return_lines', 'desk_return_allocations',
 ] as const;
 
 export interface TableInfo {

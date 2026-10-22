@@ -14,7 +14,7 @@ import BottomTabs from './BottomTabs';
 //   ≥1024     the full sidebar
 // On a trusted PC it also runs the idle-lock timer and offers "Switch person".
 export default function AppShell({ user, children }: { user: ShellUser; children: React.ReactNode }) {
-  const nav = navFor(user.permissions);
+  const nav = navFor(user.permissions, { deskSync: user.deskSync });
   return (
     <div className="min-h-dvh">
       {user.lockMinutes !== null && <ActivityTracker lockMinutes={user.lockMinutes} />}

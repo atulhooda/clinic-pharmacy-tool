@@ -61,6 +61,20 @@ test('DMG-08 / DMG-12: the static rules catch gaps, transaction control, and des
   assert.equal(bad.length, 6, bad.join('\n')); // 4 ALTERs + DROP + COMMIT; the function body and the string don't count
 });
 
+test('D-57 (amends R6-8): a CHECK may be widened in place: dropped and re-added under the same name in one statement, and nothing else', () => {
+  const base = 'CREATE TABLE t1 (org_id uuid, id uuid, kind text, CONSTRAINT t1_kind CHECK (kind IN (\'A\')));\n';
+  assert.deepEqual(checkMigrationsDir(tempTree({ '001_a.sql': base,
+    '002_b.sql': "ALTER TABLE t1 DROP CONSTRAINT t1_kind, ADD CONSTRAINT t1_kind CHECK (kind IN ('A','B')) NOT VALID;\nALTER TABLE t1 VALIDATE CONSTRAINT t1_kind;" })), []);
+  for (const stmt of [
+    'ALTER TABLE t1 DROP CONSTRAINT t1_kind;',
+    "ALTER TABLE t1 DROP CONSTRAINT t1_kind, ADD CONSTRAINT t1_other CHECK (kind IN ('A','B'));",
+    "ALTER TABLE t1 DROP CONSTRAINT t1_kind, ADD CONSTRAINT t1_kind CHECK (kind IN ('A','B')), DROP COLUMN kind;",
+    'ALTER TABLE t1 DROP CONSTRAINT t1_kind, ADD CONSTRAINT t1_kind UNIQUE (org_id, kind);',
+  ]) {
+    assert.equal(checkMigrationsDir(tempTree({ '001_a.sql': base, '002_b.sql': stmt })).length, 1, stmt);
+  }
+});
+
 test('DX-76: every route method is in the route table, and every endpoint route has a cross-tenant row in 06b', () => {
   const found: { path: string; methods: Method[] }[] = [];
   const walk = (dir: string) => {
