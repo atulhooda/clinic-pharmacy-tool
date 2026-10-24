@@ -92,7 +92,7 @@ function stockScope(s: Session, q: URLSearchParams): string[] {
 }
 
 /** E-12: list and search, each item with its balance (D-47); `lowStock`, `nearExpiry`, `premisesId` filter by stock. */
-export async function listItems(s: Session, q: URLSearchParams): Promise<{ items: (ItemView & { stock: StockSummary })[]; nextCursor: string | null }> {
+export async function listItems(s: Session, q: URLSearchParams): Promise<{ items: (ItemView & { units: Unit[]; stock: StockSummary })[]; nextCursor: string | null }> {
   const text = (q.get('q') ?? '').trim().toLowerCase().replace(/[%_\\]/g, '').slice(0, 80);
   const category = q.get('category');
   if (category && !(CATEGORIES as readonly string[]).includes(category)) throw new HttpError(422, 'FIELD_INVALID', 'Unknown category.', { field: 'category', rule: 'enum' });
@@ -125,9 +125,17 @@ export async function listItems(s: Session, q: URLSearchParams): Promise<{ items
        ORDER BY lower(i.display_name), i.id LIMIT $6`, [s.orgId, text, category, after?.n ?? null, after?.id ?? null, limit + 1, only, use]);
     const page = rows.slice(0, limit);
     const stock = await stockSummaries(db, s.orgId, scope, page.map((i) => i.id));
+    // Each item's units, so a list can show its balance in packs ("2 bottles", "8 strips").
+    const units = new Map<string, Unit[]>();
+    for (const u of await db.rows<Unit & { itemId: string }>(
+      `SELECT item_id AS "itemId", id, name, base_units_per_unit AS "baseUnitsPerUnit", is_base AS "isBase", dispensable, purchasable, active
+         FROM item_units WHERE org_id = $1 AND item_id = ANY($2::uuid[]) ORDER BY base_units_per_unit, lower(name)`, [s.orgId, page.map((i) => i.id)])) {
+      const { itemId, ...unit } = u;
+      units.set(itemId, [...(units.get(itemId) ?? []), unit]);
+    }
     const last = page[page.length - 1];
     return {
-      items: page.map((i) => ({ ...i, stock: stock.get(i.id) ?? EMPTY_STOCK })),
+      items: page.map((i) => ({ ...i, units: units.get(i.id) ?? [], stock: stock.get(i.id) ?? EMPTY_STOCK })),
       nextCursor: rows.length > limit && last ? Buffer.from(JSON.stringify({ n: last.displayName.toLowerCase(), id: last.id })).toString('base64url') : null,
     };
   });

@@ -11,14 +11,19 @@ export function unitWord(n: number, unit: string): string {
   return `${n} ${/(s|x|z|ch|sh)$/.test(u) ? `${u}es` : `${u}s`}`;
 }
 
-/** "3 strips + 5 tablets": the largest active pack that fits, with the loose base units. */
+/** "1 box + 5 strips + 3 tablets": the active packs, largest first, then the loose base units. */
 export function packs(base: number, baseUnit: string, units: readonly PackUnit[] = []): string {
-  const pack = units.filter((u) => !u.isBase && u.active && u.baseUnitsPerUnit > 1).sort((a, b) => b.baseUnitsPerUnit - a.baseUnitsPerUnit)
-    .find((u) => Math.abs(base) >= u.baseUnitsPerUnit);
-  if (!pack) return unitWord(base, baseUnit);
-  const whole = Math.trunc(base / pack.baseUnitsPerUnit);
-  const loose = base - whole * pack.baseUnitsPerUnit;
-  return loose === 0 ? unitWord(whole, pack.name) : `${unitWord(whole, pack.name)} + ${unitWord(loose, baseUnit)}`;
+  const sizes = units.filter((u) => !u.isBase && u.active && u.baseUnitsPerUnit > 1).sort((a, b) => b.baseUnitsPerUnit - a.baseUnitsPerUnit);
+  const parts: string[] = [];
+  let left = base;
+  for (const u of sizes) {
+    const whole = Math.trunc(left / u.baseUnitsPerUnit);
+    if (whole === 0) continue;
+    parts.push(unitWord(whole, u.name));
+    left -= whole * u.baseUnitsPerUnit;
+  }
+  if (left !== 0 || parts.length === 0) parts.push(unitWord(left, baseUnit));
+  return parts.join(' + ');
 }
 
 /** `DD-MM-YYYY HH:mm` in IST. */

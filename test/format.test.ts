@@ -27,6 +27,11 @@ test('packs: base units with the largest pack that fits alongside; plurals', () 
   const boxes = [{ name: 'box', baseUnitsPerUnit: 100, isBase: false, active: true }, { name: 'old box', baseUnitsPerUnit: 200, isBase: false, active: false }];
   assert.equal(packs(250, 'PIECE', boxes), '2 boxes + 50 pieces', 'an inactive pack is not used');
   assert.equal(packs(60, 'G'), '60 g');
+  const box = [{ name: 'strip', baseUnitsPerUnit: 10, isBase: false, active: true }, { name: 'box', baseUnitsPerUnit: 100, isBase: false, active: true }];
+  assert.equal(packs(500, 'TABLET', box), '5 boxes');
+  assert.equal(packs(150, 'TABLET', box), '1 box + 5 strips', 'every pack level, largest first');
+  assert.equal(packs(157, 'TABLET', box), '1 box + 5 strips + 7 tablets');
+  assert.equal(packs(1400, 'ML', [{ name: 'bottle', baseUnitsPerUnit: 200, isBase: false, active: true }]), '7 bottles');
   assert.equal(unitWord(1, 'ML'), '1 ml');
 });
 

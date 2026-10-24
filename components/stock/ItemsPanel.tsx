@@ -195,7 +195,7 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
             {i.note && <span className="block text-micro font-medium text-warn">{i.note}</span>}</span>) },
           { key: 'balance', header: t.balance, align: 'right', cell: (i) => (
             <span className="block text-right">
-              <span className="block font-semibold tnum text-ink">{unitWord(i.stock?.onHandBase ?? 0, i.baseUnit)}</span>
+              <span className="block font-semibold tnum text-ink">{packs(i.stock?.onHandBase ?? 0, i.baseUnit, i.units)}</span>
               <span className="flex justify-end gap-1">
                 {i.stock?.lowStock && <Badge tone="warn">{t.lowStock}</Badge>}
                 {i.stock?.nearExpiry && <Badge tone="warn">{t.nearExpiryBadge}</Badge>}
