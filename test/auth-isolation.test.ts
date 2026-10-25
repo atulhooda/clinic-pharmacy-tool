@@ -60,6 +60,11 @@ import { POST as dReadBill } from '../app/api/dispensary/goods-receipts/read-bil
 import { PATCH as dUnitPatch } from '../app/api/dispensary/items/[id]/units/[unitId]/route';
 import { GET as dSuppliers, POST as dSuppliersPost } from '../app/api/dispensary/suppliers/route';
 import { GET as dSupplier, PATCH as dSupplierPatch } from '../app/api/dispensary/suppliers/[id]/route';
+import { GET as deskItems } from '../app/api/integrations/desk/items/route';
+import { POST as deskSales } from '../app/api/integrations/desk/sales/route';
+import { POST as deskReturns } from '../app/api/integrations/desk/returns/route';
+import { GET as dDeskSales } from '../app/api/dispensary/desk-sales/route';
+import { POST as dDeskResolve } from '../app/api/dispensary/desk-sales/[id]/resolve/route';
 
 test("DX-01: A-01 gives another organisation's display name for its public link, never an id", async () => {
   const B = await createOrg('dxb');
@@ -166,6 +171,11 @@ const HANDLERS: Record<string, Record<string, unknown>> = {
   '/api/dispensary/reports/stock-statement': { GET: dStatement },
   '/api/dispensary/suppliers': { GET: dSuppliers, POST: dSuppliersPost },
   '/api/dispensary/suppliers/[id]': { GET: dSupplier, PATCH: dSupplierPatch },
+  '/api/integrations/desk/items': { GET: deskItems },
+  '/api/integrations/desk/sales': { POST: deskSales },
+  '/api/integrations/desk/returns': { POST: deskReturns },
+  '/api/dispensary/desk-sales': { GET: dDeskSales },
+  '/api/dispensary/desk-sales/[id]/resolve': { POST: dDeskResolve },
 };
 const NONEXIST = '00000000-0000-4000-8000-000000000000';
 const paramsFor = (path: string): Record<string, string> | undefined => {
@@ -209,6 +219,11 @@ test('DX-77: every route is driven against its access rule, as owner, doctor, re
         assert.notEqual(anon.status, 401, `${m} ${r.path} is public`);
       } else if (r.access === 'device') {
         assert.deepEqual([anon.status, anon.body.code], [401, 'device_required'], `${m} ${r.path} needs a trusted-device cookie`);
+      } else if (r.access === 'desk') {
+        // D-57: off by default (no DESK_SYNC_* here), so it is not there at all, even to a signed-in owner.
+        assert.deepEqual([anon.status, anon.body.code], [404, 'not_found'], `${m} ${r.path} is off`);
+        const owner = await call(h, { method: m, path: r.path, cookie: await as('owner'), body, params });
+        assert.deepEqual([owner.status, owner.body.code], [404, 'not_found'], `${m} ${r.path} takes no session`);
       } else if (r.access === 'self') {
         assert.deepEqual([anon.status, anon.body.code], [401, 'unauthenticated'], `${m} ${r.path} needs a session`);
         const signed = await call(h, { method: m, path: r.path, cookie: await as('reception'), body, params });
@@ -233,7 +248,8 @@ test('DK-07: every write route needs an Idempotency-Key, except the documented e
   const A = await createOrg('dk7');
   const owner = await createStaff(A, { role: 'owner' });
   // 06a §12.2's documented exemptions: auth, account, and the read-only POSTs that exist so far.
-  const exempt = (p: string) => /^\/api\/(auth|account)\//.test(p) || p === '/api/dispensary/goods-receipts/read-bill';
+  // D-57: the desk's signed routes key each line instead (and are off here: 404).
+  const exempt = (p: string) => /^\/api\/(auth|account|integrations\/desk)\//.test(p) || p === '/api/dispensary/goods-receipts/read-bill';
   let checked = 0;
   for (const r of ROUTES) {
     for (const m of r.methods.filter((x) => x !== 'GET')) {

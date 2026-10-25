@@ -16,6 +16,7 @@ A standalone, multi-tenant clinic pharmacy and stock app. The design is Spec 06 
 ## Boundaries
 
 - **Standalone.** No code, table, package or runtime call depends on Ritu Desk, its voice server, or Ritu Desk's Spec 07. Ideas may be borrowed and restated; code is not shared. The one exception is the UI kit, which starts as a copy owned by this repo (06a §1.2).
+- **One HTTP integration with the desk (D-57, founder 2026-10-22).** The desk is the only billing system; it calls this app's signed `/api/integrations/desk/**` routes (06a §12.5) so its bills and credit notes move stock here. That is the whole of it: no shared database, no shared package, no desk code in this repo, and this app never calls the desk. The switch, the organisation and the premises come from env (`DESK_SYNC_KEY`, `DESK_SYNC_ORG_SLUG`, `DESK_SYNC_PREMISES_ID`); the desk's own hostnames, keys and configuration never appear here (see "Never put any of these in this repo" below).
 - **Stack.** It defaults to Ritu Desk's (06a §1.2). Propose a different tool only with a reason written into the spec.
 - **No secrets or patient data** in logs, test output, commits or chat. Tests use synthetic data only.
 

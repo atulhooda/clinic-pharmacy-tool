@@ -148,6 +148,38 @@ async function insertStaff(org: OrgFixture, extra: { login?: string; name?: stri
   return { id, code };
 }
 
+// ---------------------------------------------------------------- D-57: desk sales and returns
+function row(o: OrgFixture, table: string, r: Record<string, unknown>): Promise<string> {
+  const cols = Object.keys(r);
+  return inTenant(o, `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`, Object.values(r));
+}
+/** A desk sale line in o: SHORT by default (no location); `extra` overrides columns. */
+const saleLine = (o: OrgFixture, w: World, extra: Record<string, unknown> = {}) => row(o, 'desk_sale_lines', {
+  org_id: o.orgId, premises_id: o.premisesId, bill_id: randomUUID(), line_key: 'L1', bill_serial: 'S-1', issued_at: new Date(),
+  requested_item_id: w.itemId, item_id: w.itemId, qty_base: 1, status: 'SHORT', short_base: 1, reason: 'insufficient_stock', received_at: new Date(), ...extra });
+const postedLine = (w: World) => ({ status: 'POSTED', allocated_base: 1, short_base: 0, reason: null, location_id: w.locationId });
+interface DeskWorld { saleLineId: string; saleAllocId: string; returnLineId: string }
+const deskWorlds = new Map<string, DeskWorld>();
+async function deskWorld(o: OrgFixture): Promise<DeskWorld> {
+  const cached = deskWorlds.get(o.orgId);
+  if (cached) return cached;
+  const w = await world(o);
+  const d = { saleLineId: randomUUID(), saleAllocId: randomUUID(), returnLineId: randomUUID() };
+  for (const r of [await saleLine(o, w, { id: d.saleLineId, ...postedLine(w) }), await saleAlloc(o, w, d, { id: d.saleAllocId, alloc_no: 1 }),
+    await retLine(o, w, d, { id: d.returnLineId })]) if (r !== 'ok') throw new Error(`desk world: ${r}`);
+  deskWorlds.set(o.orgId, d);
+  return d;
+}
+const saleAlloc = (o: OrgFixture, w: World, d: Pick<DeskWorld, 'saleLineId'>, extra: Record<string, unknown> = {}) => row(o, 'desk_sale_allocations', {
+  org_id: o.orgId, premises_id: o.premisesId, sale_line_id: d.saleLineId, alloc_no: 2 + Math.floor(Math.random() * 400), item_id: w.itemId,
+  batch_id: w.batchId, location_id: w.locationId, qty_base: 1, created_at: new Date(), ...extra });
+const retLine = (o: OrgFixture, w: World, d: Pick<DeskWorld, 'saleLineId'>, extra: Record<string, unknown> = {}) => row(o, 'desk_return_lines', {
+  org_id: o.orgId, premises_id: o.premisesId, credit_note_id: randomUUID(), bill_id: randomUUID(), line_key: 'L1', sale_line_id: d.saleLineId,
+  qty_base: 1, returned_base: 0, status: 'NOTHING_TO_RETURN', reason: 'already_returned', received_at: new Date(), ...extra });
+const retAlloc = (o: OrgFixture, w: World, d: DeskWorld, extra: Record<string, unknown> = {}) => row(o, 'desk_return_allocations', {
+  org_id: o.orgId, premises_id: o.premisesId, return_line_id: d.returnLineId, sale_allocation_id: d.saleAllocId, item_id: w.itemId,
+  batch_id: w.batchId, location_id: w.locationId, qty_base: 1, created_at: new Date(), ...extra });
+
 export const FK_BUILDERS: Record<string, FkBuilder> = {
   async org_settings_history_settings_fk(a, b) {
     const wb = await world(b);
@@ -398,6 +430,60 @@ export const FK_BUILDERS: Record<string, FkBuilder> = {
     const [wa, wb] = [await world(a), await world(b)];
     return adjLine(a, wa, { location_id: wb.locationId });
   },
+  async desk_sale_lines_premises_fk(a, b) {
+    return saleLine(a, await world(a), { premises_id: b.premisesId });
+  },
+  async desk_sale_lines_item_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return saleLine(a, wa, { item_id: wb.itemId, requested_item_id: wb.itemId });
+  },
+  async desk_sale_lines_location_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return saleLine(a, wa, { ...postedLine(wa), location_id: wb.locationId });
+  },
+  async desk_sale_lines_resolved_by_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return saleLine(a, wa, { resolved_by: wb.staffId, resolved_at: new Date() });
+  },
+  async desk_sale_allocations_line_fk(a, b) {
+    return saleAlloc(a, await world(a), await deskWorld(b));
+  },
+  async desk_sale_allocations_item_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return saleAlloc(a, wa, await deskWorld(a), { item_id: wb.itemId, batch_id: null });
+  },
+  async desk_sale_allocations_batch_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return saleAlloc(a, wa, await deskWorld(a), { batch_id: wb.batchId });
+  },
+  async desk_sale_allocations_location_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return saleAlloc(a, wa, await deskWorld(a), { location_id: wb.locationId });
+  },
+  async desk_return_lines_premises_fk(a, b) {
+    return retLine(a, await world(a), await deskWorld(a), { premises_id: b.premisesId });
+  },
+  async desk_return_lines_sale_fk(a, b) {
+    return retLine(a, await world(a), await deskWorld(b));
+  },
+  async desk_return_allocations_line_fk(a, b) {
+    return retAlloc(a, await world(a), await deskWorld(a), { return_line_id: (await deskWorld(b)).returnLineId });
+  },
+  async desk_return_allocations_sale_fk(a, b) {
+    return retAlloc(a, await world(a), await deskWorld(a), { sale_allocation_id: (await deskWorld(b)).saleAllocId });
+  },
+  async desk_return_allocations_item_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return retAlloc(a, wa, await deskWorld(a), { item_id: wb.itemId, batch_id: null });
+  },
+  async desk_return_allocations_batch_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return retAlloc(a, wa, await deskWorld(a), { batch_id: wb.batchId });
+  },
+  async desk_return_allocations_location_fk(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    return retAlloc(a, wa, await deskWorld(a), { location_id: wb.locationId });
+  },
   async device_state_session_fk(a, b) {
     const [wa, wb] = [await world(a), await world(b)];
     return inTenant(a, 'INSERT INTO device_state (org_id, device_id, active_session_id) VALUES ($1, $2, $3)', [a.orgId, wa.deviceId, wb.sessionId]);
@@ -601,6 +687,48 @@ export const UNIQUE_BUILDERS: Record<string, UniqueBuilder> = {
   async suppliers_gstin_key(a, b) {
     return twice(a, b, (o, v) => inTenant(o, 'INSERT INTO suppliers (org_id, name, gstin) VALUES ($1, $2, $3)',
       [o.orgId, v === 'again' ? 'Gstin Two' : 'Gstin One', '24AAAAA0000A1Z5']));
+  },
+  async desk_sync_nonces_key(a, b) {
+    const nonce = randomUUID();
+    return twice(a, b, (o) => inTenant(o, 'INSERT INTO desk_sync_nonces (org_id, nonce, seen_at) VALUES ($1, $2, now())', [o.orgId, nonce]));
+  },
+  async desk_sale_lines_premises_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    const id = randomUUID();
+    return twice(a, b, (o, v) => saleLine(o, o === a ? wa : wb, { id, line_key: v === 'again' ? 'L2' : 'L1' }));
+  },
+  async desk_sale_lines_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    const billId = randomUUID();
+    return twice(a, b, (o) => saleLine(o, o === a ? wa : wb, { bill_id: billId, line_key: 'same' }));
+  },
+  async desk_sale_allocations_premises_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    const [da, db] = [await deskWorld(a), await deskWorld(b)];
+    const id = randomUUID();
+    return twice(a, b, (o, v) => saleAlloc(o, o === a ? wa : wb, o === a ? da : db, { id, alloc_no: v === 'again' ? 901 : 900 }));
+  },
+  async desk_sale_allocations_no_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    const [da, db] = [await deskWorld(a), await deskWorld(b)];
+    return twice(a, b, (o) => saleAlloc(o, o === a ? wa : wb, o === a ? da : db, { alloc_no: 999 }));
+  },
+  async desk_return_lines_premises_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    const [da, db] = [await deskWorld(a), await deskWorld(b)];
+    const id = randomUUID();
+    return twice(a, b, (o, v) => retLine(o, o === a ? wa : wb, o === a ? da : db, { id, line_key: v === 'again' ? 'L2' : 'L1' }));
+  },
+  async desk_return_lines_key(a, b) {
+    const [wa, wb] = [await world(a), await world(b)];
+    const [da, db] = [await deskWorld(a), await deskWorld(b)];
+    const cn = randomUUID();
+    return twice(a, b, (o) => retLine(o, o === a ? wa : wb, o === a ? da : db, { credit_note_id: cn, line_key: 'same' }));
+  },
+  async staff_users_system_key(a, b) {
+    return twice(a, b, async (o, v) => inTenant(o, `INSERT INTO staff_users (org_id, name, login, role_key, password_hash, active, system_kind)
+                                                    VALUES ($1, $2, $3, 'reception', $4, false, 'DESK_SYNC')`,
+      [o.orgId, v === 'again' ? 'System two' : 'System one', v === 'again' ? 'system.two' : 'system.one', await aHash()]));
   },
   async device_state_device_key(a, b) {
     const [wa, wb] = [await world(a), await world(b)];

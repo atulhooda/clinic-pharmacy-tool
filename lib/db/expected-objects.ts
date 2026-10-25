@@ -65,4 +65,19 @@ export const EXPECTED_OBJECTS: readonly ExpectedObject[] = [
   { kind: 'constraint', table: 'goods_receipts', name: 'goods_receipts_received_after_invoice', since: 22 },
   { kind: 'constraint', table: 'goods_receipts', name: 'goods_receipts_posted', since: 22 },
   { kind: 'constraint', table: 'goods_receipt_lines', name: 'goods_receipt_lines_batch', since: 22 },
+  // D-57: the system actor can never sign in, and stays what it is.
+  { kind: 'constraint', table: 'staff_users', name: 'staff_users_system_unusable', since: 27 },
+  { kind: 'trigger', table: 'staff_users', name: 'staff_users_system_guard', since: 27 },
+  // D-57: desk sales and returns.
+  { kind: 'constraint', table: 'desk_sync_nonces', name: 'desk_sync_nonces_key', since: 28 },
+  { kind: 'constraint', table: 'desk_sale_lines', name: 'desk_sale_lines_key', since: 28 },
+  { kind: 'constraint', table: 'desk_sale_lines', name: 'desk_sale_lines_never_partial', since: 28 },
+  { kind: 'trigger', table: 'desk_sale_lines', name: 'desk_sale_lines_guard', since: 28 },
+  { kind: 'trigger', table: 'desk_sale_lines', name: 'desk_sale_lines_no_delete', since: 28 },
+  { kind: 'trigger', table: 'desk_sale_allocations', name: 'desk_sale_allocations_append_only', since: 28 },
+  { kind: 'constraint', table: 'desk_return_lines', name: 'desk_return_lines_key', since: 28 },
+  { kind: 'trigger', table: 'desk_return_lines', name: 'desk_return_lines_append_only', since: 28 },
+  { kind: 'trigger', table: 'desk_return_allocations', name: 'desk_return_allocations_append_only', since: 28 },
+  { kind: 'trigger', table: 'desk_return_allocations', name: 'desk_return_allocations_cap', since: 28 },
+  { kind: 'constraint', table: 'stock_movements', name: 'stock_movements_reference', since: 28 },
 ];

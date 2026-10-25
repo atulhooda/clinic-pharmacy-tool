@@ -1,4 +1,5 @@
 import type { Session } from './guard';
+import { deskSyncOnFor } from '../integrations/desk/config';
 
 /** What the shell shows about the signed-in person: plain, serialisable, no ids beyond the slug. */
 export interface ShellUser {
@@ -11,6 +12,8 @@ export interface ShellUser {
   deviceName: string | null;
   lockMinutes: number | null;
   permissions: string[];
+  /** D-57: the desk's bills move this organisation's stock (shows "Desk sales"). */
+  deskSync: boolean;
 }
 
 export function shellUser(s: Session): ShellUser {
@@ -24,5 +27,6 @@ export function shellUser(s: Session): ShellUser {
     deviceName: s.device?.name ?? null,
     lockMinutes: s.lockMinutes,
     permissions: [...s.permissions],
+    deskSync: deskSyncOnFor(s.orgSlug),
   };
 }

@@ -259,6 +259,8 @@ DX-76 fails the build if any route lacks a row here.
 | DX-85 | E-49 a credit note | B's credit note | 404 `CREDIT_NOTE_NOT_FOUND`, identical to `NONEXIST` |
 | DX-86 | E-50 the sales register | B_GJ | 404 `PREMISES_NOT_FOUND`, identical to `NONEXIST` |
 | DX-87 | E-51 reading a bill | a bill naming B's supplier (B's GSTIN) and B's item names | no candidate is ever one of B's suppliers or items; the response names none of them |
+| DX-88 | E-52 … E-54 the desk sync | A's switch on (`DESK_SYNC_ORG_SLUG` = A); a body naming B's `orgId`; a sale line naming B's item; B's stock | 422 `UNKNOWN_FIELD` for `orgId`; B's item is `rejected` `unknown_item`; B's stock never moves; E-52 lists none of B's items. The organisation and premises come only from the env. |
+| DX-89 | E-55, E-56 desk sales | B's desk sale line, listed and resolved by A's owner | E-55 lists none of B's lines; E-56 → 404 `DESK_SALE_NOT_FOUND`, identical to `NONEXIST` |
 | **Stock** | | | |
 | DX-33 | E-01 / E-02 / E-03 settings | — | reads and writes A's only; E-02 on a configured A → 409 `ALREADY_CONFIGURED`; B's row unchanged |
 | DX-34 | E-04 `GET /dispensary/premises` | — | A_GJ and A_MH only |
@@ -869,6 +871,30 @@ The reader is replaced by a fixed fake in these rows (no network): it returns a 
 | DBR-06 | a transcription with a wrong type (qty `"ten"`, MRP `"abc"`); then one with no lines at all | each bad field null and flagged, the rest kept; then 502 `BILL_READ_FAILED` |
 | DBR-07 | any E-51 call | no draft, no movement, no audit row; no `Idempotency-Key` needed; the response holds no image data; the one log line holds counts and a duration only |
 | DBR-08 | the request the server builds for the model | the configured model; the image (or PDF) as base64 with its media type; a single forced tool, `record_bill`; no patient data anywhere in it |
+
+### 24.3 The desk ⇄ pharmacy stock sync (DDS, D-57)
+
+Driven in-process through the real route handlers with requests signed as the desk signs them (`test/desk-sync.test.ts`). Synthetic organisations, items and bills only.
+
+| ID | Scenario | Expected |
+|---|---|---|
+| DDS-01 | E-52 … E-54 with none, or only some, of `DESK_SYNC_KEY` (≥ 32), `DESK_SYNC_ORG_SLUG`, `DESK_SYNC_PREMISES_ID` set; a key of 13 characters | 404 `not_found` for every route, signed or not, even to a signed-in owner (DX-77) |
+| DDS-02 | no signature; no desk headers; the wrong key; a body changed after signing; signed for another path | 401 `bad_signature`; nothing moves |
+| DDS-03 | a timestamp 121 s old or ahead; 119 s old; a nonce used twice | 401 `stale_timestamp`; accepted; 401 `nonce_reused` (the replayed sale moves nothing) |
+| DDS-04 | E-52 with a retail item (two batches, MRP 1005 and 900 paise per box of 10, stock in quarantine at 5000, a placeholder), a BOTH item, an IN_CLINIC retail item, a removed item, a medicine, a consumable | only active retail items for patients; on hand counts everything; dispensable = the two store batches; max MRP = 101 paise per piece; no stock → null |
+| DDS-05 | E-53, 6 pieces across a batch expiring in 60 days (3) and one in 300 days (5) | posted; 3 from the earlier, 3 from the later; DISPENSE movements, `DESK_SALE_ALLOCATION`, actor "Ritu Desk" (`system_kind` DESK_SYNC) |
+| DDS-06 | the same bill line sent again (3 times, then with another quantity) | the stored answer each time; balances unchanged |
+| DDS-07 | stock on an expired batch, in quarantine and on a placeholder, and 2 on a real batch; a line of 3, of 40, of 2 | short 1 `details_pending`, short 38 `insufficient_stock`, nothing posted for either; then posted from the real batch only |
+| DDS-08 | a medicine, an IN_CLINIC retail item, an unknown id; duplicate line keys; a zero quantity | rejected `not_retail_product`, `not_for_patients`, `unknown_item`, nothing moves; 422 `DUPLICATE_LINE_KEY`; 422 |
+| DDS-09 | the same line posted twice at once (three rounds) | one set of movements per bill; both answers identical |
+| DDS-10 | E-54: return 4 of 6 taken; the same credit note again; another for 5 plus a short line; a third | 3 back to the later batch then 1 to the earlier; unchanged; 2 back (`more_than_taken`), `not_posted`; `already_returned`. Exactly the 6 taken came back. |
+| DDS-11 | as the app role: a return allocation beyond the sale's; a posted line set to SHORT; a POSTED line with 3 of 5 allocated | `DESK_RETURN_EXCEEDS_SALE`; `DESK_SALE_FIXED`; `desk_sale_lines_never_partial` |
+| DDS-12 | E-55 / E-56: a short line listed for reception; Retry by reception, without a grant, still short, after stock arrives, again; the desk's retry of that bill | 403; 401 `reauth_required`; SHORT with the shortfall; POSTED in the owner's name; 409 `DESK_SALE_POSTED`; `posted`, nothing more moves |
+| DDS-13 | the "Ritu Desk" actor: three first bills at once; sign-in with its login; the staff list; as the app role: activate it, give it a PIN, clear `system_kind`, change its hash, make a person a system actor | one row; 401; not listed; `staff_users_system_unusable` ×2, `SYSTEM_ACTOR_FIXED` ×3 |
+| DDS-14 | another tenant reads the five new tables; the self-check as the app role | none of A's rows; no failures |
+| DDS-15 | a credit note arriving before its sale (twice); the sale; a credit mixing a known and an unknown line; the first credit again | 409 `sale_not_received`, nothing stored; posted; 409, nothing moves; returned 4: stock net zero |
+| DDS-16 | a credit note on a short line; the open list; Retry after stock arrives; the desk's retry of the sale; as the app role, set a credited line POSTED | `nothing_to_return` `not_posted`, the line `CANCELLED` `credited`; not listed; 409 `DESK_SALE_CREDITED`, nothing moves; `cancelled`; `DESK_SALE_CREDITED` |
+| DDS-17 | a 300 KB body, signed and unsigned; a wrongly signed request | 413 `BODY_TOO_LARGE` both; 401 with zero database queries (not even the self-check) |
 
 ## 25. Events and jobs (DJ)
 

@@ -14,9 +14,10 @@ export interface RouteEntry {
   methods: Method[];
   /**
    * 'public'; 'self' (needs a session; acts only on the caller); 'device' (needs a trusted-device
-   * cookie, not a session: the lock screen); or the permission the route checks.
+   * cookie, not a session: the lock screen); 'desk' (D-57: no session; signed by the desk with
+   * DESK_SYNC_KEY, and 404 while the sync is off); or the permission the route checks.
    */
-  access: 'public' | 'self' | 'device' | { permission: Permission };
+  access: 'public' | 'self' | 'device' | 'desk' | { permission: Permission };
   /** The re-auth purpose whose grant the route consumes (06a §3.7), if any (06b DPN-11). */
   reauth?: string;
   /** The 06a §12.3 endpoint id (e.g. 'E-28'), or null for an operational route. */
@@ -92,4 +93,10 @@ export const ROUTES: readonly RouteEntry[] = [
   { path: '/api/dispensary/suppliers', methods: ['POST'], access: { permission: 'stock.items' }, endpoint: 'E-20' },
   { path: '/api/dispensary/suppliers/[id]', methods: ['GET'], access: { permission: 'stock.view' }, endpoint: 'E-21' },
   { path: '/api/dispensary/suppliers/[id]', methods: ['PATCH'], access: { permission: 'stock.items' }, endpoint: 'E-21' },
+  // D-57: the desk ⇄ pharmacy stock sync.
+  { path: '/api/integrations/desk/items', methods: ['GET'], access: 'desk', endpoint: 'E-52' },
+  { path: '/api/integrations/desk/sales', methods: ['POST'], access: 'desk', endpoint: 'E-53' },
+  { path: '/api/integrations/desk/returns', methods: ['POST'], access: 'desk', endpoint: 'E-54' },
+  { path: '/api/dispensary/desk-sales', methods: ['GET'], access: { permission: 'stock.view' }, endpoint: 'E-55' },
+  { path: '/api/dispensary/desk-sales/[id]/resolve', methods: ['POST'], access: { permission: 'stock.adjust' }, endpoint: 'E-56', reauth: 'stock.adjust' },
 ];
