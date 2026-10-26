@@ -409,7 +409,7 @@ export const en = {
   },
   deskSales: {
     title: 'Desk sales',
-    subtitle: 'Every bill from the desk and the stock it took, newest first. A line that could not take all of its stock took none: count or receive the stock, then retry it.',
+    subtitle: 'Every bill from the desk and the stock it took, newest first. A line marked Short or Not sold here took no stock: fix the stock, then press Retry.',
     open: 'Problems',
     all: 'All bills',
     batch: 'Batch taken',

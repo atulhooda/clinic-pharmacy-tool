@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from 'react';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
 import DataList from '@/components/ui/DataList';
-import FilterPills from '@/components/ui/FilterPills';
 import { api, newIdempotencyKey } from '@/components/settings/client';
 import { useGrant } from '@/components/settings/useGrant';
 import { en } from '@/lib/i18n/en';
@@ -14,14 +13,12 @@ type Row = {
   id: string; premisesId: string; billSerial: string; lineKey: string; issuedAt: string; receivedAt: string; itemId: string | null; itemName: string | null;
   qtyBase: number; baseUnit: string | null; batches: string | null; returnedBase: number; status: 'POSTED' | 'SHORT' | 'REJECTED' | 'CANCELLED'; shortBase: number; reason: string | null;
 };
-type Filter = 'open' | 'all';
 
 const reasonText = (r: string | null) => (r ? (t.reasons as Record<string, string>)[r] ?? r : '');
 const when = (iso: string) => new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' });
 
 /** D-57, E-55/E-56: desk sale lines that took no stock (short or not sellable here), and Retry. */
 export function DeskSalesPanel({ canResolve }: { canResolve: boolean }) {
-  const [filter, setFilter] = useState<Filter>('all');
   const [rows, setRows] = useState<Row[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -29,9 +26,9 @@ export function DeskSalesPanel({ canResolve }: { canResolve: boolean }) {
   const { withGrant, dialog } = useGrant();
 
   const load = useCallback(async () => {
-    const r = await api<{ items: Row[] }>(`/api/dispensary/desk-sales?status=${filter}`);
+    const r = await api<{ items: Row[] }>('/api/dispensary/desk-sales?status=all');
     if (r.ok) { setRows(r.body.items); setError(null); } else setError(r.body.error ?? t.failed);
-  }, [filter]);
+  }, []);
   useEffect(() => { void load(); }, [load]);
 
   const retry = async (row: Row) => {
@@ -56,8 +53,7 @@ export function DeskSalesPanel({ canResolve }: { canResolve: boolean }) {
 
   return (
     <div className="space-y-4">
-      <FilterPills value={filter} onChange={setFilter} options={[{ key: 'all', label: t.all }, { key: 'open', label: t.open }]} />
-      {filter === 'all' && rows.length > 0 && (
+      {rows.length > 0 && (
         <p className="text-small text-muted">
           {t.summary(rows.filter((r) => r.status === 'POSTED').length, rows.length, new Set(rows.map((r) => r.billSerial)).size)}
         </p>
@@ -65,7 +61,7 @@ export function DeskSalesPanel({ canResolve }: { canResolve: boolean }) {
       {error && <p role="alert" className="text-small text-bad">{error}</p>}
       {note && <p role="status" className="text-small text-muted">{note}</p>}
       <div className="card overflow-hidden">
-        <DataList rows={rows} rowKey={(r) => r.id} empty={filter === 'open' ? t.empty : t.emptyAll} columns={[
+        <DataList rows={rows} rowKey={(r) => r.id} empty={t.emptyAll} columns={[
           { key: 'item', header: t.item, primary: true, cell: (r) => (
             <span>
               <span className="block font-semibold text-ink">{r.itemName ?? t.unknownItem}</span>
