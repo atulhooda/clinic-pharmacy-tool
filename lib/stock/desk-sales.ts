@@ -146,13 +146,20 @@ export interface DeskSaleView {
   reason: string | null;
   resolvedAt: string | null;
   resolvedBy: string | null;
+  /** The batches the line took its stock from ("B043 ×2"), and how much was credited back. */
+  batches: string | null;
+  returnedBase: number;
 }
 
 const VIEW = `
   SELECT d.id, d.premises_id AS "premisesId", d.bill_id AS "billId", d.bill_serial AS "billSerial", d.line_key AS "lineKey",
          d.issued_at AS "issuedAt", d.received_at AS "receivedAt", d.item_id AS "itemId", i.display_name AS "itemName",
          d.qty_base AS "qtyBase", i.base_unit AS "baseUnit", d.status, d.allocated_base AS "allocatedBase", d.short_base AS "shortBase",
-         d.reason, d.resolved_at AS "resolvedAt", u.name AS "resolvedBy"
+         d.reason, d.resolved_at AS "resolvedAt", u.name AS "resolvedBy",
+         (SELECT string_agg(coalesce(bt.batch_no, '—') || ' ×' || a.qty_base, ', ' ORDER BY a.alloc_no)
+            FROM desk_sale_allocations a LEFT JOIN batches bt ON bt.org_id = a.org_id AND bt.id = a.batch_id
+           WHERE a.org_id = d.org_id AND a.sale_line_id = d.id) AS batches,
+         coalesce((SELECT sum(r.qty_base)::int FROM desk_return_lines r WHERE r.org_id = d.org_id AND r.sale_line_id = d.id), 0) AS "returnedBase"
     FROM desk_sale_lines d
     LEFT JOIN items i ON i.org_id = d.org_id AND i.id = d.item_id
     LEFT JOIN staff_users u ON u.org_id = d.org_id AND u.id = d.resolved_by
@@ -168,7 +175,7 @@ export async function listDeskSales(s: Session, q: URLSearchParams): Promise<{ i
   const premises = s.premises.map((p) => p.id);
   return withTenant(s.orgId, async (db) => {
     const rows = await db.rows<Row>(`${VIEW} AND d.premises_id = ANY($2::uuid[]) ${status === 'open' ? "AND d.status IN ('SHORT','REJECTED')" : ''}
-                                     ORDER BY d.received_at DESC, d.id LIMIT 200`, [s.orgId, premises]);
+                                     ORDER BY d.issued_at DESC, d.received_at DESC, d.line_key LIMIT 500`, [s.orgId, premises]);
     const open = (await db.rows<{ n: number }>(`SELECT count(*)::int AS n FROM desk_sale_lines WHERE org_id = $1 AND premises_id = ANY($2::uuid[]) AND status IN ('SHORT','REJECTED')`,
       [s.orgId, premises]))[0].n;
     return { items: rows.map(view), open };

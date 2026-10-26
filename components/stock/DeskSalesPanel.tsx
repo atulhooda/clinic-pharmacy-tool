@@ -12,7 +12,7 @@ import { en } from '@/lib/i18n/en';
 const t = en.deskSales;
 type Row = {
   id: string; premisesId: string; billSerial: string; lineKey: string; issuedAt: string; receivedAt: string; itemId: string | null; itemName: string | null;
-  qtyBase: number; baseUnit: string | null; status: 'POSTED' | 'SHORT' | 'REJECTED' | 'CANCELLED'; shortBase: number; reason: string | null;
+  qtyBase: number; baseUnit: string | null; batches: string | null; returnedBase: number; status: 'POSTED' | 'SHORT' | 'REJECTED' | 'CANCELLED'; shortBase: number; reason: string | null;
 };
 type Filter = 'open' | 'all';
 
@@ -21,7 +21,7 @@ const when = (iso: string) => new Date(iso).toLocaleString('en-IN', { dateStyle:
 
 /** D-57, E-55/E-56: desk sale lines that took no stock (short or not sellable here), and Retry. */
 export function DeskSalesPanel({ canResolve }: { canResolve: boolean }) {
-  const [filter, setFilter] = useState<Filter>('open');
+  const [filter, setFilter] = useState<Filter>('all');
   const [rows, setRows] = useState<Row[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -56,7 +56,12 @@ export function DeskSalesPanel({ canResolve }: { canResolve: boolean }) {
 
   return (
     <div className="space-y-4">
-      <FilterPills value={filter} onChange={setFilter} options={[{ key: 'open', label: t.open }, { key: 'all', label: t.all }]} />
+      <FilterPills value={filter} onChange={setFilter} options={[{ key: 'all', label: t.all }, { key: 'open', label: t.open }]} />
+      {filter === 'all' && rows.length > 0 && (
+        <p className="text-small text-muted">
+          {t.summary(rows.filter((r) => r.status === 'POSTED').length, rows.length, new Set(rows.map((r) => r.billSerial)).size)}
+        </p>
+      )}
       {error && <p role="alert" className="text-small text-bad">{error}</p>}
       {note && <p role="status" className="text-small text-muted">{note}</p>}
       <div className="card overflow-hidden">
@@ -66,8 +71,12 @@ export function DeskSalesPanel({ canResolve }: { canResolve: boolean }) {
               <span className="block font-semibold text-ink">{r.itemName ?? t.unknownItem}</span>
               {r.reason && <span className="block text-micro text-muted">{reasonText(r.reason)}</span>}
             </span>) },
-          { key: 'bill', header: t.bill, cell: (r) => <span className="tnum">{r.billSerial}</span> },
-          { key: 'qty', header: t.qty, align: 'right', cell: (r) => <span className="tnum">{r.qtyBase} {r.baseUnit?.toLowerCase() ?? ''}</span> },
+          { key: 'bill', header: t.bill, cell: (r) => (
+            <span><span className="block tnum font-medium text-ink">{r.billSerial}</span><span className="block text-micro text-muted">{when(r.issuedAt)}</span></span>) },
+          { key: 'qty', header: t.qty, align: 'right', cell: (r) => (
+            <span className="block text-right"><span className="block tnum">{r.qtyBase} {r.baseUnit?.toLowerCase() ?? ''}</span>
+              {r.returnedBase > 0 && <span className="block text-micro text-muted">{t.returned} {r.returnedBase}</span>}</span>) },
+          { key: 'batch', header: t.batch, phoneHidden: true, cell: (r) => <span className="text-small text-muted">{r.batches ?? '—'}</span> },
           { key: 'status', header: t.status, cell: status },
           { key: 'received', header: t.received, phoneHidden: true, cell: (r) => <span className="text-small text-muted">{when(r.receivedAt)}</span> },
           { key: 'action', header: '', align: 'right', cell: (r) => (canResolve && (r.status === 'SHORT' || r.status === 'REJECTED') && r.itemId

@@ -303,6 +303,11 @@ test('E-54: a credit note puts back what the bill line took, newest allocation f
   assert.equal(r1.status, 200, JSON.stringify(r1.body));
   assert.deepEqual(r1.body.lines, [{ lineKey: 'L1', status: 'returned', returnedBase: 4, reason: null }]);
   assert.deepEqual([await onHand(w, later), await onHand(w, sooner)], [3, 1], 'the later batch (taken last) comes back first');
+  // The Desk sales log (D-62): every bill line, with the batches it took and what came back.
+  const log = (await w.owner.call(deskSalesList, { path: '/api/dispensary/desk-sales?status=all' })).body.items
+    .filter((i: { billId: string }) => i.billId === billId).sort((x: { lineKey: string }, y: { lineKey: string }) => x.lineKey.localeCompare(y.lineKey));
+  assert.deepEqual(log.map((i: { lineKey: string; status: string; batches: string | null; returnedBase: number }) => [i.lineKey, i.status, i.batches?.split(', ').length ?? 0, i.returnedBase]),
+    [['L1', 'POSTED', 2, 4], ['L2', 'SHORT', 0, 0]]);
   assert.deepEqual(await ret(cn1, [{ lineKey: 'L1', qtyBase: 4 }]).then((r) => r.body), r1.body, 'the same credit-note line again');
   assert.deepEqual([await onHand(w, later), await onHand(w, sooner)], [3, 1], 'and nothing moved');
   const r2 = await ret(randomUUID(), [{ lineKey: 'L1', qtyBase: 5 }, { lineKey: 'L2', qtyBase: 1 }]);
