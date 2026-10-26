@@ -285,6 +285,71 @@ export async function recordBatchDetails(s: Session, input: BatchDetailsInput, g
   });
 }
 
+export const WRITE_OFF_REASONS = {
+  EXPIRY_WRITEOFF: ['EXPIRED'],
+  DAMAGE_WRITEOFF: ['DAMAGED', 'BROKEN_OR_SPILLED', 'COLD_CHAIN_BREACH', 'CONTAMINATED', 'LOST', 'THEFT_SUSPECTED', 'RETURN_NOT_RESALEABLE', 'OTHER'],
+} as const;
+export type WriteOffKind = keyof typeof WRITE_OFF_REASONS;
+export interface WriteOffInput {
+  premisesId: string;
+  kind: WriteOffKind;
+  reasonCode: string;
+  note: string | null;
+  /** qtyBase null: all of that batch at the premises (quarantine first, then the store). */
+  lines: { itemId: string; batchId: string | null; qtyBase: number | null }[];
+}
+
+/**
+ * E-34 write-off kinds (D-58, from PR 10): stock that leaves for good. An expiry write-off takes only an
+ * expired batch (the database refuses one that is not, L-7); a damage write-off any. Quarantined stock
+ * can only leave this way (L-20). Signed with the `stock.writeoff` grant for the premises.
+ */
+export async function writeOff(s: Session, input: WriteOffInput, grantId: string | undefined): Promise<string> {
+  requirePremises(s, input.premisesId);
+  if (!(input.kind in WRITE_OFF_REASONS)) throw bad('kind', 'enum');
+  if (!(WRITE_OFF_REASONS[input.kind] as readonly string[]).includes(input.reasonCode)) throw new HttpError(422, 'REASON_REQUIRED', 'Choose why this stock is written off.');
+  if (input.reasonCode === 'OTHER' && !input.note) throw new HttpError(422, 'NOTE_REQUIRED', 'Say what happened when the reason is "other".');
+  if (input.lines.length === 0 || input.lines.length > MAX_LINES) throw bad('lines', 'length');
+  return withStockTx(s, async (db) => {
+    const locations = await premisesReady(db, s.orgId, input.premisesId);
+    await consumeGrant(db, s, 'stock.writeoff', input.premisesId, grantId);
+    await lockBalances(db, s.orgId, input.lines.flatMap((l) => locations.map((x) => ({ itemId: l.itemId, locationId: x.id }))));
+    const moves: { itemId: string; batchId: string | null; locationId: string; qty: number }[] = [];
+    for (const [i, l] of input.lines.entries()) {
+      const rows = await db.rows<{ locationId: string; kind: string; n: number }>(
+        `SELECT b.location_id AS "locationId", loc.kind, b.on_hand AS n FROM stock_balances b JOIN stock_locations loc ON loc.org_id = b.org_id AND loc.id = b.location_id
+          WHERE b.org_id = $1 AND b.premises_id = $2 AND b.item_id = $3 AND b.batch_id IS NOT DISTINCT FROM $4::uuid AND b.on_hand > 0
+          ORDER BY (loc.kind = 'QUARANTINE') DESC`, [s.orgId, input.premisesId, l.itemId, l.batchId]);
+      const have = rows.reduce((a, r) => a + r.n, 0);
+      if (have === 0) throw new HttpError(404, 'NO_STOCK', 'There is no stock of that batch here.', { lineNo: i + 1 });
+      let left = l.qtyBase ?? have;
+      if (left > have) throw new HttpError(409, 'INSUFFICIENT_STOCK', 'Not enough stock.', { lineNo: i + 1 });
+      for (const r of rows) {
+        if (left === 0) break;
+        const take = Math.min(left, r.n);
+        moves.push({ itemId: l.itemId, batchId: l.batchId, locationId: r.locationId, qty: take });
+        left -= take;
+      }
+    }
+    const at = now();
+    const header = (await db.rows<{ id: string }>(
+      `INSERT INTO stock_adjustments (org_id, premises_id, kind, reason_code, note, created_by, occurred_at, recorded_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $7) RETURNING id`, [s.orgId, input.premisesId, input.kind, input.reasonCode, input.note, s.staffUserId, at]))[0].id;
+    const movements: MovementInput[] = [];
+    for (const [i, m] of moves.entries()) {
+      const line = (await db.rows<{ id: string }>(
+        `INSERT INTO stock_adjustment_lines (org_id, premises_id, adjustment_id, line_no, item_id, batch_id, location_id, qty_delta)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, [s.orgId, input.premisesId, header, i + 1, m.itemId, m.batchId, m.locationId, -m.qty]))[0].id;
+      movements.push({ premisesId: input.premisesId, itemId: m.itemId, batchId: m.batchId, locationId: m.locationId, type: input.kind, qtyDelta: -m.qty,
+        referenceType: 'STOCK_ADJUSTMENT_LINE', referenceId: line, reasonCode: input.reasonCode, note: input.note });
+    }
+    await postMovements(db, { orgId: s.orgId, staffUserId: s.staffUserId, name: s.name }, { occurredAt: at, recordedAt: at }, movements);
+    await writeAudit(db, { orgId: s.orgId, action: 'stock.written_off', actorLabel: s.name, actorRole: s.roleKey, staffUserId: s.staffUserId,
+      sessionId: s.sid, deviceId: s.deviceId, entityId: header, detail: { kind: input.kind.toLowerCase(), count: moves.length, reason: input.reasonCode.toLowerCase() } });
+    return header;
+  });
+}
+
 // ---------------------------------------------------------------- reads
 
 export interface BatchHint {

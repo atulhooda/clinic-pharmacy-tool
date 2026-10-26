@@ -11,6 +11,7 @@ import { setClockForTests } from '../lib/clock';
 import { POST as adjPost, GET as adjList } from '../app/api/dispensary/adjustments/route';
 import { GET as adjGet } from '../app/api/dispensary/adjustments/[id]/route';
 import { POST as detailsPost } from '../app/api/dispensary/adjustments/batch-details/route';
+import { POST as writeOffPost } from '../app/api/dispensary/adjustments/write-off/route';
 import { GET as itemGet } from '../app/api/dispensary/items/[id]/route';
 import { GET as hintGet } from '../app/api/dispensary/items/[id]/batch-hint/route';
 import { POST as grnsPost } from '../app/api/dispensary/goods-receipts/route';
@@ -202,6 +203,33 @@ test('D-55 batch details: pending stock moves onto its real batch, part or all; 
     assert.deepEqual([item.stock.onHandBase, item.stock.detailsPending, item.stock.quarantinedBase], [30, false, 10], 'the expired batch went to quarantine');
     assert.equal((await details({ batchNo: 'p-3', expiry: '06/2028' })).body.code, 'NO_PENDING_STOCK');
     assert.equal((await w.reception.call(detailsPost, { body: { premisesId: w.main.id, itemId: w.pcm.id, mrpUnitId: w.pcm.packUnitId, mrpPaise: 4500, batchNo: 'x', expiry: '06/2028' },
+      headers: { 'idempotency-key': randomUUID() } })).status, 403);
+  } finally {
+    setClockForTests(null);
+  }
+});
+
+test('D-58 write-off: expired stock leaves quarantine for good; an expiry write-off of a good batch is refused; damage takes any; signed', async () => {
+  setClockForTests(T0);
+  try {
+    const w = await stockWorld('adj10');
+    const old = await adjust(w, { lines: [{ itemId: w.pcm.id, newBatch: { batchNo: 'OLD-2', expiry: '08/2026', mrpPaise: 4500, mrpUnitId: w.pcm.packUnitId }, countedBase: 12 }] });
+    const good = await adjust(w, { lines: [{ itemId: w.pcm.id, newBatch: { batchNo: 'NEW-2', expiry: '08/2028', mrpPaise: 4500, mrpUnitId: w.pcm.packUnitId }, countedBase: 30 }] });
+    const wo = async (body: Record<string, unknown>, signed = true) => w.owner.call(writeOffPost, { body: { premisesId: w.main.id, ...body },
+      headers: { 'idempotency-key': randomUUID(), ...(signed ? { 'reauth-grant': await grant(w.owner, w.aa, 'stock.writeoff', w.main.id) } : {}) } });
+    const oldBatch = old.body.lines[0].batchId, goodBatch = good.body.lines[0].batchId;
+    assert.equal((await wo({ kind: 'EXPIRY_WRITEOFF', reasonCode: 'EXPIRED', lines: [{ itemId: w.pcm.id, batchId: oldBatch }] }, false)).body.code, 'reauth_required');
+    assert.equal((await wo({ kind: 'EXPIRY_WRITEOFF', reasonCode: 'DAMAGED', lines: [{ itemId: w.pcm.id, batchId: oldBatch }] })).body.code, 'REASON_REQUIRED');
+    const r = await wo({ kind: 'EXPIRY_WRITEOFF', reasonCode: 'EXPIRED', lines: [{ itemId: w.pcm.id, batchId: oldBatch }] });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.deepEqual([r.body.kind, r.body.lines.map((l: { qtyDelta: number }) => l.qtyDelta)], ['EXPIRY_WRITEOFF', [-12]]);
+    assert.equal((await wo({ kind: 'EXPIRY_WRITEOFF', reasonCode: 'EXPIRED', lines: [{ itemId: w.pcm.id, batchId: goodBatch, qtyBase: 1 }] })).body.code, 'EXPIRY_WRITEOFF_NOT_EXPIRED');
+    const dmg = await wo({ kind: 'DAMAGE_WRITEOFF', reasonCode: 'BROKEN_OR_SPILLED', lines: [{ itemId: w.pcm.id, batchId: goodBatch, qtyBase: 5 }] });
+    assert.deepEqual([dmg.status, dmg.body.lines[0].qtyDelta], [201, -5]);
+    assert.equal((await wo({ kind: 'DAMAGE_WRITEOFF', reasonCode: 'LOST', lines: [{ itemId: w.pcm.id, batchId: goodBatch, qtyBase: 26 }] })).body.code, 'INSUFFICIENT_STOCK');
+    const item = (await w.owner.call(itemGet, { params: { id: w.pcm.id } })).body;
+    assert.deepEqual([item.stock.onHandBase, item.stock.expiredBase, item.stock.quarantinedBase], [25, 0, 0]);
+    assert.equal((await w.reception.call(writeOffPost, { body: { premisesId: w.main.id, kind: 'DAMAGE_WRITEOFF', reasonCode: 'LOST', lines: [{ itemId: w.pcm.id, batchId: goodBatch }] },
       headers: { 'idempotency-key': randomUUID() } })).status, 403);
   } finally {
     setClockForTests(null);

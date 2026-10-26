@@ -17,6 +17,7 @@ import { api } from '@/components/settings/client';
 import { dmy, istDateTime, movementLabel, packs, unitWord } from './format';
 import { AdjustStockSheet } from './AdjustStockSheet';
 import { BatchDetailsSheet, type PendingStock } from './BatchDetailsSheet';
+import { useGrant } from '@/components/settings/useGrant';
 
 const t = en.stock;
 type Unit = { id: string; name: string; baseUnitsPerUnit: number; isBase: boolean; dispensable: boolean; purchasable: boolean; active: boolean };
@@ -39,7 +40,8 @@ const USES: UseFor[] = ['PATIENTS', 'IN_CLINIC', 'BOTH'];
 const defaultUse = (category: string): UseFor => (category === 'INJECTABLE' || category === 'CONSUMABLE' ? 'IN_CLINIC' : 'PATIENTS');
 
 /** E-08 … E-17: the catalogue. Items come from the medicine list or are custom; pack units have fixed factors. */
-export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust: boolean }) {
+export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdit: boolean; canAdjust: boolean; canWriteOff?: boolean }) {
+  const { withGrant, dialog: grantDialog } = useGrant();
   const [q, setQ] = useState('');
   const [cat, setCat] = useState<'ALL' | string>('ALL');
   const [allItems, setItems] = useState<Item[]>([]);
@@ -92,6 +94,19 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
     await load('');
     if (id && open?.id === id) await reopen(id);
   };
+
+  /** D-58: an expired batch leaves for good (all of it at the premises), signed. */
+  async function writeOffBatch(b: BatchRow) {
+    if (!open || !window.confirm(t.writeOffConfirm)) return;
+    setError(null);
+    const grant = await withGrant('stock.writeoff', b.premisesId);
+    if (!grant) return;
+    const r = await api('/api/dispensary/adjustments/write-off', { grant, body: { premisesId: b.premisesId, kind: 'EXPIRY_WRITEOFF', reasonCode: 'EXPIRED',
+      lines: [{ itemId: open.id, batchId: b.id }] } });
+    if (!r.ok) return setError(r.body.error ?? en.settings.failed);
+    await load('');
+    await reopen(open.id);
+  }
 
   /** Every medicine in one dropdown: the clinic's own items first, then the medicine list. */
   async function openAdd() {
@@ -264,7 +279,8 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
                         )}
                       </span>) : <span className="font-semibold">{b.batchNo}</span>) },
                     { key: 'exp', header: t.expiry, cell: (b) => (b.detailsPending ? <span className="text-faint">—</span> : (
-                      <span className="flex items-center gap-1">{dmy(b.expiryDate)}{b.expired && <Badge tone="bad">{t.expiredBadge}</Badge>}</span>)) },
+                      <span className="flex flex-wrap items-center gap-1">{dmy(b.expiryDate)}{b.expired && <Badge tone="bad">{t.expiredBadge}</Badge>}
+                        {b.expired && canWriteOff && b.onHandBase > 0 && <Button onClick={() => void writeOffBatch(b)}>{t.writeOff}</Button>}</span>)) },
                     { key: 'mrp', header: t.mrp, align: 'right', cell: (b) => (b.detailsPending ? <span className="text-faint">—</span>
                       : <span className="tnum">{fmtPaise(b.mrpPaise)} / {b.mrpUnitName}</span>) },
                     { key: 'on', header: t.onHand, align: 'right', cell: (b) => (
@@ -348,6 +364,7 @@ export function ItemsPanel({ canEdit, canAdjust }: { canEdit: boolean; canAdjust
           </div>
         )}
       </Sheet>
+      {grantDialog}
       <AdjustStockSheet item={adjusting} onClose={() => setAdjusting(null)} onDone={() => void adjusted()} />
       <BatchDetailsSheet stock={detailing} onClose={() => setDetailing(null)} onDone={() => { const id = detailing?.itemId; setDetailing(null); void load(''); if (id) void reopen(id); }} />
     </div>

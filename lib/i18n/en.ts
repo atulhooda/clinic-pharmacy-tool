@@ -211,6 +211,8 @@ export const en = {
     detailsPending: 'Details pending',
     note: 'Note',
     noteHint: 'Shown on the Stock list, e.g. what still needs doing for this item.',
+    writeOff: 'Write off',
+    writeOffConfirm: 'Write off all of this expired batch? It leaves the stock for good (the record stays).',
     remove: 'Remove from the list',
     putBack: 'Put back on the list',
     removeHint: 'Removed items are hidden from the Stock list; their history stays.',

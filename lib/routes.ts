@@ -87,6 +87,7 @@ export const ROUTES: readonly RouteEntry[] = [
   { path: '/api/dispensary/adjustments', methods: ['POST'], access: { permission: 'stock.adjust' }, endpoint: 'E-34' },
   { path: '/api/dispensary/adjustments/[id]', methods: ['GET'], access: { permission: 'stock.view' }, endpoint: 'E-34' },
   { path: '/api/dispensary/adjustments/batch-details', methods: ['POST'], access: { permission: 'stock.adjust' }, endpoint: 'E-34' },
+  { path: '/api/dispensary/adjustments/write-off', methods: ['POST'], access: { permission: 'stock.writeoff' }, endpoint: 'E-34' },
   { path: '/api/dispensary/items/[id]/batch-hint', methods: ['GET'], access: { permission: 'stock.view' }, endpoint: 'E-34' },
   { path: '/api/dispensary/reports/stock-statement', methods: ['GET'], access: { permission: 'stock.view' }, endpoint: 'E-45' },
   { path: '/api/dispensary/suppliers', methods: ['GET'], access: { permission: 'stock.view' }, endpoint: 'E-20' },
