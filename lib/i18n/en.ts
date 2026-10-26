@@ -428,7 +428,7 @@ export const en = {
       insufficient_stock: 'not enough stock',
       details_pending: 'only stock without batch details',
       unknown_item: 'the item is not in this pharmacy',
-      not_retail_product: 'not a retail product',
+      not_retail_product: 'not sold at the desk (only retail products and medicines are)',
       not_for_patients: 'marked for use in the clinic',
       item_inactive: 'the item is removed from the Stock list',
       credited: 'the bill was credited before any stock was taken',

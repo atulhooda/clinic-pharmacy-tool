@@ -13,7 +13,7 @@ import { inScope } from './scope';
 /**
  * The stock side of the desk's sales (06a §6.7, §9.3 desk_sale; D-57). The desk is the only
  * billing system; a bill it issues moves stock here, line by line:
- * - only items given to patients that are RETAIL_PRODUCT (v1), active;
+ * - only items given to patients that are RETAIL_PRODUCT or MEDICINE (D-59; v1 was retail only), active;
  * - FEFO (allocate.ts) over the premises' default STORE only: never quarantine, never an expired
  *   batch, never a placeholder batch whose details are pending (D-55);
  * - all of a line or none of it: a line that cannot be fully allocated posts nothing and is kept
@@ -28,11 +28,14 @@ export interface DeskItem {
   active: boolean;
 }
 
-/** Why an item cannot be sold through the desk (v1), or null if it can. */
+/** The categories the desk may sell (D-59): retail products and medicines; never injectables or consumables. */
+export const DESK_CATEGORIES: readonly string[] = ['RETAIL_PRODUCT', 'MEDICINE'];
+
+/** Why an item cannot be sold through the desk, or null if it can. The code keeps its v1 name (the contract's). */
 export function deskIneligibility(item: DeskItem | undefined): string | null {
   if (!item) return 'unknown_item';
-  if (item.category !== 'RETAIL_PRODUCT') return 'not_retail_product';
-  // D-54: NULL is the category's default, which for a retail product is "given to patients".
+  if (!DESK_CATEGORIES.includes(item.category)) return 'not_retail_product';
+  // D-54: NULL is the category's default, which for a retail product or a medicine is "given to patients".
   if (item.useFor === 'IN_CLINIC') return 'not_for_patients';
   if (!item.active) return 'item_inactive';
   return null;

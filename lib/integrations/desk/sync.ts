@@ -129,7 +129,7 @@ export async function deskItems(ctx: DeskContext): Promise<{ items: DeskItemView
               coalesce(bal.on_hand, 0) AS "onHandBase", coalesce(bal.dispensable, 0) AS "dispensableBase",
               bal.max_mrp AS "maxMrpPaisePerBase", i.active
          FROM items i LEFT JOIN bal ON bal.item_id = i.id
-        WHERE i.org_id = $1 AND i.active AND i.category = 'RETAIL_PRODUCT' AND coalesce(i.use_for, 'PATIENTS') IN ('PATIENTS','BOTH')
+        WHERE i.org_id = $1 AND i.active AND i.category IN ('RETAIL_PRODUCT','MEDICINE') AND coalesce(i.use_for, 'PATIENTS') IN ('PATIENTS','BOTH')
         ORDER BY lower(i.display_name)`,
       [ctx.orgId, ctx.premisesId, storeId, istDate(now())]);
     return { items: items.map((i) => ({ ...i, maxMrpPaisePerBase: i.maxMrpPaisePerBase === null ? null : Number(i.maxMrpPaisePerBase) })) };

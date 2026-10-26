@@ -158,7 +158,7 @@ test('D-57: the organisation and premises come only from the env: a body cannot 
 
 // ---------------------------------------------------------------- E-52
 
-test('E-52: only active retail products given to patients, with on-hand, dispensable and the highest MRP per base unit (rounded up)', async () => {
+test('E-52 / D-59: only active retail products and medicines given to patients, with on-hand, dispensable and the highest MRP per base unit (rounded up)', async () => {
   const w = await stockWorld('dsitems');
   const cream = await retail(w, 'Cream');
   const both = await retail(w, 'Shampoo', { useFor: 'BOTH' });
@@ -174,8 +174,8 @@ test('E-52: only active retail products given to patients, with on-hand, dispens
   const r = await desk(deskItemsRoute, 'GET', ITEMS);
   assert.equal(r.status, 200, JSON.stringify(r.body));
   const ids = (r.body.items as { id: string }[]).map((i) => i.id);
-  assert.ok(ids.includes(cream.id) && ids.includes(both.id));
-  assert.ok(!ids.includes(clinicOnly.id) && !ids.includes(removed.id) && !ids.includes(w.pcm.id) && !ids.includes(w.glv.id), 'retail, for patients, active only');
+  assert.ok(ids.includes(cream.id) && ids.includes(both.id) && ids.includes(w.pcm.id), 'retail products and medicines (D-59)');
+  assert.ok(!ids.includes(clinicOnly.id) && !ids.includes(removed.id) && !ids.includes(w.glv.id), 'given to patients, active, never a consumable');
   const c = r.body.items.find((i: { id: string }) => i.id === cream.id);
   assert.deepEqual({ onHand: c.onHandBase, dispensable: c.dispensableBase, maxMrp: c.maxMrpPaisePerBase, category: c.category, baseUnit: c.baseUnit, active: c.active },
     { onHand: 19, dispensable: 12, maxMrp: 101, category: 'RETAIL_PRODUCT', baseUnit: 'PIECE', active: true });
@@ -247,19 +247,22 @@ test('E-53: expired, quarantined and placeholder stock is never taken; a short l
   assert.deepEqual((await movements(w, item.id)).map((m) => [m.batchId, m.qty]), [[real, -2]], 'only the real, unexpired store batch');
 });
 
-test('E-53: an item that is not a retail product given to patients, or not in this pharmacy, is rejected and moves nothing', async () => {
+test('E-53 / D-59: a medicine sells like a retail product; a consumable, an item used in clinic, or one not in this pharmacy is rejected and moves nothing', async () => {
   const w = await stockWorld('dsrej');
   const peel = await retail(w, 'Peel', { useFor: 'IN_CLINIC' });
   await stock(w, peel, 10, day(200));
   const pcmBatch = await batch(w, { expiry: day(200) });
   await post(w, [{ type: 'OPENING_BALANCE', batchId: pcmBatch, qtyDelta: 30 }]);
+  await post(w, [{ type: 'OPENING_BALANCE', itemId: w.glv.id, batchId: null, qtyDelta: 100 }]);
   on(w);
   const r = await desk(deskSalesRoute, 'POST', SALES, sale([
-    { lineKey: 'med', itemId: w.pcm.id, qtyBase: 1 }, { lineKey: 'peel', itemId: peel.id, qtyBase: 1 }, { lineKey: 'ghost', itemId: randomUUID(), qtyBase: 1 }]));
+    { lineKey: 'med', itemId: w.pcm.id, qtyBase: 1 }, { lineKey: 'gloves', itemId: w.glv.id, qtyBase: 1 }, { lineKey: 'peel', itemId: peel.id, qtyBase: 1 },
+    { lineKey: 'ghost', itemId: randomUUID(), qtyBase: 1 }]));
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(r.body.lines.map((l: { status: string; reason: string }) => [l.status, l.reason]),
-    [['rejected', 'not_retail_product'], ['rejected', 'not_for_patients'], ['rejected', 'unknown_item']]);
-  assert.equal((await movements(w, w.pcm.id)).length + (await movements(w, peel.id)).length, 0);
+  assert.deepEqual(r.body.lines.map((l: { status: string; reason?: string }) => [l.status, l.reason ?? null]),
+    [['posted', null], ['rejected', 'not_retail_product'], ['rejected', 'not_for_patients'], ['rejected', 'unknown_item']]);
+  assert.deepEqual((await movements(w, w.pcm.id)).map((m) => [m.batchId, m.qty]), [[pcmBatch, -1]], 'the medicine moved, by FEFO');
+  assert.equal((await movements(w, w.glv.id)).length + (await movements(w, peel.id)).length, 0);
   const bad = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'a', itemId: peel.id, qtyBase: 1 }, { lineKey: 'a', itemId: peel.id, qtyBase: 1 }]));
   assert.deepEqual([bad.status, bad.body.code], [422, 'DUPLICATE_LINE_KEY']);
   assert.equal((await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'a', itemId: peel.id, qtyBase: 0 }]))).status, 422);
