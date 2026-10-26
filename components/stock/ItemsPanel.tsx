@@ -280,9 +280,9 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
                       </span>) : (
                       <span className="flex flex-wrap items-center gap-2">
                         <span className="font-semibold">{b.batchNo}</span>
-                        {canAdjust && b.locations.some((l) => l.kind !== 'QUARANTINE' && l.onHandBase > 0) && (
+                        {canAdjust && b.onHandBase > 0 && (
                           <Button onClick={() => setDetailing({ itemId: open.id, itemName: open.displayName, baseUnit: open.baseUnit, premisesId: b.premisesId,
-                            pendingBase: b.locations.filter((l) => l.kind !== 'QUARANTINE').reduce((n, l) => n + l.onHandBase, 0), units: open.units ?? [],
+                            pendingBase: Math.max(...b.locations.map((l) => l.onHandBase)), units: open.units ?? [],
                             from: { batchId: b.id, batchNo: b.batchNo, expiry: b.expiryDate, mrpPaise: b.mrpPaise, mrpUnitId: (open.units ?? []).find((u) => u.name === b.mrpUnitName)?.id ?? null } })}>
                             {t.details.edit}</Button>
                         )}

@@ -254,3 +254,23 @@ test('D-60 edit details: a real batch with a wrong expiry moves onto the correct
     setClockForTests(null);
   }
 });
+
+test('D-61: an expiry typed wrong (stock in quarantine) is corrected onto the shelf; other counts still cannot leave quarantine', async () => {
+  setClockForTests(T0);
+  try {
+    const w = await stockWorld('adj12');
+    const r = await adjust(w, { lines: [{ itemId: w.pcm.id, newBatch: { batchNo: 'Q-1', expiry: '03/2026', mrpPaise: 4500, mrpUnitId: w.pcm.packUnitId }, countedBase: 15 }] });
+    const from = r.body.lines[0].batchId;
+    assert.equal((await adjust(w, { reasonCode: 'COUNT_CORRECTION', lines: [{ itemId: w.pcm.id, batchId: from, countedBase: 10 }] })).body.code, 'QUARANTINED');
+    const ok = await w.owner.call(detailsPost, { body: { premisesId: w.main.id, itemId: w.pcm.id, mrpUnitId: w.pcm.packUnitId, mrpPaise: 4500, fromBatchId: from, batchNo: 'Q-1', expiry: '03/2028' },
+      headers: { 'reauth-grant': await grant(w.owner, w.aa, 'stock.adjust', w.main.id), 'idempotency-key': randomUUID() } });
+    assert.equal(ok.status, 201, JSON.stringify(ok.body));
+    const item = (await w.owner.call(itemGet, { params: { id: w.pcm.id } })).body;
+    assert.deepEqual([item.stock.onHandBase, item.stock.quarantinedBase, item.stock.expiredBase, item.stock.dispensableBase], [15, 0, 0, 15]);
+    assert.equal((await asOwnerIn(w.org.orgId, `INSERT INTO stock_movements (org_id, premises_id, item_id, batch_id, location_id, movement_type, qty_delta, reference_type, reference_id, reason_code, actor_staff_id, actor_label, occurred_at, recorded_at)
+      SELECT $1, $2, $3, $4, $5, 'STOCKTAKE_ADJUSTMENT', -1, 'STOCK_ADJUSTMENT_LINE', gen_random_uuid(), 'COUNT_CORRECTION', $6, 'x', now(), now()`,
+      [w.org.orgId, w.main.id, w.pcm.id, from, w.main.quarantine, w.aa.id]))?.hint, 'QUARANTINED', 'the database still refuses any other count out of quarantine');
+  } finally {
+    setClockForTests(null);
+  }
+});

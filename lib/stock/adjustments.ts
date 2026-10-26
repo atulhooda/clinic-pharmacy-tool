@@ -261,9 +261,14 @@ export async function recordBatchDetails(s: Session, input: BatchDetailsInput, g
     const store = locations.find((x) => x.isDefault);
     const to = expired ? locations.find((x) => x.kind === 'QUARANTINE') : store;
     if (!store || !to) throw new HttpError(409, 'PREMISES_NOT_CONFIGURED', 'This premises has no store set up.');
-    await lockBalances(db, s.orgId, [{ itemId: input.itemId, locationId: store.id }, { itemId: input.itemId, locationId: to.id }]);
-    const onHand = (await db.rows<{ n: number }>(
-      'SELECT on_hand AS n FROM stock_balances WHERE org_id = $1 AND item_id = $2 AND batch_id = $3 AND location_id = $4', [s.orgId, input.itemId, pending.id, store.id]))[0]?.n ?? 0;
+    // The stock to move: on the store, or (D-61, a correction) wherever that batch holds it, quarantine included.
+    const quarantine = locations.find((x) => x.kind === 'QUARANTINE');
+    await lockBalances(db, s.orgId, [store, to, ...(quarantine ? [quarantine] : [])].map((l) => ({ itemId: input.itemId, locationId: l.id })));
+    const held = await db.rows<{ loc: string; n: number }>(
+      'SELECT location_id AS loc, on_hand AS n FROM stock_balances WHERE org_id = $1 AND item_id = $2 AND batch_id = $3 AND on_hand > 0 ORDER BY (location_id = $4) DESC',
+      [s.orgId, input.itemId, pending.id, store.id]);
+    const source = input.fromBatchId ? held[0]?.loc ?? store.id : store.id;
+    const onHand = held.find((h) => h.loc === source)?.n ?? 0;
     const qty = input.qtyBase ?? onHand;
     if (qty <= 0) throw new HttpError(409, 'NO_PENDING_STOCK', 'This item has no stock waiting for batch details here.');
     if (qty > onHand) throw new HttpError(409, 'INSUFFICIENT_STOCK', 'That is more than the stock waiting for details.');
@@ -276,7 +281,7 @@ export async function recordBatchDetails(s: Session, input: BatchDetailsInput, g
       `INSERT INTO stock_adjustments (org_id, premises_id, kind, reason_code, note, created_by, occurred_at, recorded_at)
        VALUES ($1, $2, 'STOCKTAKE_ADJUSTMENT', $3, NULL, $4, $5, $5) RETURNING id`, [s.orgId, input.premisesId, reason, s.staffUserId, at]))[0].id;
     const moves: MovementInput[] = [];
-    for (const [i, [batchId, locationId, delta]] of ([[pending.id, store.id, -qty], [real, to.id, qty]] as const).entries()) {
+    for (const [i, [batchId, locationId, delta]] of ([[pending.id, source, -qty], [real, to.id, qty]] as const).entries()) {
       const line = (await db.rows<{ id: string }>(
         `INSERT INTO stock_adjustment_lines (org_id, premises_id, adjustment_id, line_no, item_id, batch_id, location_id, qty_delta)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, [s.orgId, input.premisesId, header, i + 1, input.itemId, batchId, locationId, delta]))[0].id;
