@@ -11,7 +11,9 @@ import { parseRupees, unitWord } from './format';
 
 const t = en.stock.details;
 type Unit = { id: string; name: string; baseUnitsPerUnit: number; isBase: boolean; active: boolean };
-export type PendingStock = { itemId: string; itemName: string; baseUnit: string; premisesId: string; pendingBase: number; units: Unit[] };
+export type PendingStock = { itemId: string; itemName: string; baseUnit: string; premisesId: string; pendingBase: number; units: Unit[];
+  /** D-60: editing a real batch: its id and current details. */
+  from?: { batchId: string; batchNo: string; expiry: string; mrpPaise: number; mrpUnitId: string | null } };
 const EXPIRY = /^(\d{1,2}\s*[/-]\s*(\d{2}|\d{4})|\d{4}-\d{2}-\d{2})$/;
 
 /**
@@ -34,6 +36,11 @@ export function BatchDetailsSheet({ stock, onClose, onDone }: { stock: PendingSt
     const countUnit = pack && stock.pendingBase % pack.baseUnitsPerUnit === 0 ? pack : base;
     setF({ batchNo: '', expiry: '', mrp: '', mrpUnitId: (pack ?? base)?.id ?? '', count: String(stock.pendingBase / (countUnit?.baseUnitsPerUnit ?? 1)), unitId: countUnit?.id ?? '' });
     setError(null); setKey(newIdempotencyKey());
+    if (stock.from) {
+      const e = stock.from.expiry;
+      setF((cur) => ({ ...cur, batchNo: stock.from!.batchNo, expiry: `${e.slice(5, 7)}/${e.slice(0, 4)}`, mrp: (stock.from!.mrpPaise / 100).toFixed(2), mrpUnitId: stock.from!.mrpUnitId ?? cur.mrpUnitId }));
+      return;
+    }
     // Prefill from the newest bill of the item, when it has these details.
     void api<{ hint: { batchNo: string | null; expiry: string | null; mrpPaise: number | null; mrpUnitId: string | null } | null }>(
       `/api/dispensary/items/${stock.itemId}/batch-hint?premisesId=${stock.premisesId}`).then((r) => {
@@ -59,7 +66,8 @@ export function BatchDetailsSheet({ stock, onClose, onDone }: { stock: PendingSt
       const grant = await withGrant('stock.adjust', stock!.premisesId);
       if (!grant) return;
       const r = await api('/api/dispensary/adjustments/batch-details', { grant, idempotencyKey: key, body: {
-        premisesId: stock!.premisesId, itemId: stock!.itemId, batchNo: f.batchNo, expiry: f.expiry, mrpPaise, mrpUnitId: f.mrpUnitId, qtyBase } });
+        premisesId: stock!.premisesId, itemId: stock!.itemId, batchNo: f.batchNo, expiry: f.expiry, mrpPaise, mrpUnitId: f.mrpUnitId, qtyBase,
+        fromBatchId: stock!.from?.batchId ?? null } });
       if (!r.ok) return setError(r.body.error ?? en.settings.failed);
       onDone();
     } finally {
@@ -68,7 +76,7 @@ export function BatchDetailsSheet({ stock, onClose, onDone }: { stock: PendingSt
   }
 
   return (
-    <Sheet open onOpenChange={(o) => !o && onClose()} title={`${t.title}: ${stock.itemName}`} description={t.intro}>
+    <Sheet open onOpenChange={(o) => !o && onClose()} title={`${stock.from ? t.editTitle : t.title}: ${stock.itemName}`} description={stock.from ? t.editIntro : t.intro}>
       <form onSubmit={save} className="space-y-4" noValidate>
         <div className="grid grid-cols-2 gap-3">
           <TextField label={t.batchNo} autoFocus value={f.batchNo} maxLength={40} onChange={(e) => setF({ ...f, batchNo: e.target.value })} />
@@ -82,7 +90,7 @@ export function BatchDetailsSheet({ stock, onClose, onDone }: { stock: PendingSt
             {units.map((u) => <option key={u.id} value={u.id}>{u.isBase ? u.name : `${u.name} (${u.baseUnitsPerUnit})`}</option>)}
           </SelectField>
         </div>
-        <p className="text-small text-muted">{t.pendingNow} {unitWord(stock.pendingBase, stock.baseUnit)}. {t.oneAtATime}</p>
+        <p className="text-small text-muted">{stock.from ? t.onBatch : t.pendingNow} {unitWord(stock.pendingBase, stock.baseUnit)}. {t.oneAtATime}</p>
         {error && <p role="alert" className="text-small text-bad">{error}</p>}
         <Button type="submit" variant="brutal-blue" disabled={busy}>{t.save}</Button>
       </form>

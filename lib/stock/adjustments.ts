@@ -228,6 +228,8 @@ export interface BatchDetailsInput {
   batch: NewBatch;
   /** How much of the pending stock is this batch, in base units; all of it when null. */
   qtyBase: number | null;
+  /** D-60: correct a real batch's details instead (its store stock moves to the corrected batch). */
+  fromBatchId?: string | null;
 }
 
 /**
@@ -247,9 +249,11 @@ export async function recordBatchDetails(s: Session, input: BatchDetailsInput, g
               coalesce(i.custom_manufacturer_address, m.manufacturer_address) AS "mfrAddress"
          FROM items i LEFT JOIN medicine_master m ON m.id = i.master_id WHERE i.org_id = $1 AND i.id = $2`, [s.orgId, input.itemId]))[0];
     if (!item) throw new HttpError(404, 'ITEM_NOT_FOUND', 'No such item.');
-    const pending = (await db.rows<{ id: string }>(
-      'SELECT id FROM batches WHERE org_id = $1 AND premises_id = $2 AND item_id = $3 AND details_pending IS TRUE', [s.orgId, input.premisesId, input.itemId]))[0];
-    if (!pending) throw new HttpError(404, 'NO_PENDING_STOCK', 'This item has no stock waiting for batch details here.');
+    const pending = input.fromBatchId
+      ? (await db.rows<{ id: string }>('SELECT id FROM batches WHERE org_id = $1 AND premises_id = $2 AND item_id = $3 AND id = $4', [s.orgId, input.premisesId, input.itemId, input.fromBatchId]))[0]
+      : (await db.rows<{ id: string }>(
+        'SELECT id FROM batches WHERE org_id = $1 AND premises_id = $2 AND item_id = $3 AND details_pending IS TRUE', [s.orgId, input.premisesId, input.itemId]))[0];
+    if (!pending) throw new HttpError(404, input.fromBatchId ? 'BATCH_NOT_FOUND' : 'NO_PENDING_STOCK', input.fromBatchId ? 'No such batch of that item here.' : 'This item has no stock waiting for batch details here.');
     const unit = (await db.rows('SELECT 1 FROM item_units WHERE org_id = $1 AND item_id = $2 AND id = $3', [s.orgId, input.itemId, input.batch.mrpUnitId]))[0];
     if (!unit) throw new HttpError(404, 'UNIT_NOT_FOUND', 'No such unit of that item.');
     const exp = parseExpiry(input.batch.expiry)!;
@@ -266,7 +270,8 @@ export async function recordBatchDetails(s: Session, input: BatchDetailsInput, g
     const real = (await resolveBatch(db, s.orgId, { premisesId: input.premisesId, itemId: input.itemId, batchNo: input.batch.batchNo, expiryDate: exp.date,
       expiryAsPrinted: exp.printed, mrpPaise: input.batch.mrpPaise, mrpUnitId: input.batch.mrpUnitId, manufacturerName: item.mfrName, manufacturerAddress: item.mfrAddress })).id;
     const at = now();
-    const reason = 'BATCH_DETAILS_RECORDED';
+    if (real === pending.id) throw new HttpError(422, 'NOTHING_TO_CHANGE', 'Those are the details this batch already has.');
+    const reason = input.fromBatchId ? 'BATCH_DETAILS_CORRECTED' : 'BATCH_DETAILS_RECORDED';
     const header = (await db.rows<{ id: string }>(
       `INSERT INTO stock_adjustments (org_id, premises_id, kind, reason_code, note, created_by, occurred_at, recorded_at)
        VALUES ($1, $2, 'STOCKTAKE_ADJUSTMENT', $3, NULL, $4, $5, $5) RETURNING id`, [s.orgId, input.premisesId, reason, s.staffUserId, at]))[0].id;

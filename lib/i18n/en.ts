@@ -226,6 +226,10 @@ export const en = {
     details: {
       button: 'Add details',
       title: 'Batch details',
+      editTitle: 'Edit batch details',
+      editIntro: 'Correct the batch number, expiry or MRP. The stock moves onto the corrected batch; the history keeps both.',
+      onBatch: 'On this batch:',
+      edit: 'Edit',
       intro: 'Read these off the pack. The stock moves from "details pending" onto this batch.',
       batchNo: 'Batch number',
       expiry: 'Expiry (MM/YYYY)',

@@ -277,7 +277,16 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
                           <Button onClick={() => setDetailing({ itemId: open.id, itemName: open.displayName, baseUnit: open.baseUnit, premisesId: b.premisesId,
                             pendingBase: b.onHandBase, units: open.units ?? [] })}>{t.details.button}</Button>
                         )}
-                      </span>) : <span className="font-semibold">{b.batchNo}</span>) },
+                      </span>) : (
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold">{b.batchNo}</span>
+                        {canAdjust && b.locations.some((l) => l.kind !== 'QUARANTINE' && l.onHandBase > 0) && (
+                          <Button onClick={() => setDetailing({ itemId: open.id, itemName: open.displayName, baseUnit: open.baseUnit, premisesId: b.premisesId,
+                            pendingBase: b.locations.filter((l) => l.kind !== 'QUARANTINE').reduce((n, l) => n + l.onHandBase, 0), units: open.units ?? [],
+                            from: { batchId: b.id, batchNo: b.batchNo, expiry: b.expiryDate, mrpPaise: b.mrpPaise, mrpUnitId: (open.units ?? []).find((u) => u.name === b.mrpUnitName)?.id ?? null } })}>
+                            {t.details.edit}</Button>
+                        )}
+                      </span>)) },
                     { key: 'exp', header: t.expiry, cell: (b) => (b.detailsPending ? <span className="text-faint">—</span> : (
                       <span className="flex flex-wrap items-center gap-1">{dmy(b.expiryDate)}{b.expired && <Badge tone="bad">{t.expiredBadge}</Badge>}
                         {b.expired && canWriteOff && b.onHandBase > 0 && <Button onClick={() => void writeOffBatch(b)}>{t.writeOff}</Button>}</span>)) },

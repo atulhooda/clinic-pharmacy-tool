@@ -235,3 +235,22 @@ test('D-58 write-off: expired stock leaves quarantine for good; an expiry write-
     setClockForTests(null);
   }
 });
+
+test('D-60 edit details: a real batch with a wrong expiry moves onto the corrected batch; unchanged details are refused', async () => {
+  setClockForTests(T0);
+  try {
+    const w = await stockWorld('adj11');
+    const r = await adjust(w, { lines: [{ itemId: w.pcm.id, newBatch: { batchNo: 'E-1', expiry: '06/2027', mrpPaise: 4500, mrpUnitId: w.pcm.packUnitId }, countedBase: 30 }] });
+    const from = r.body.lines[0].batchId;
+    const edit = async (body: Record<string, unknown>) => w.owner.call(detailsPost, { body: { premisesId: w.main.id, itemId: w.pcm.id, mrpUnitId: w.pcm.packUnitId, mrpPaise: 4500, fromBatchId: from, ...body },
+      headers: { 'reauth-grant': await grant(w.owner, w.aa, 'stock.adjust', w.main.id), 'idempotency-key': randomUUID() } });
+    assert.equal((await edit({ batchNo: 'E-1', expiry: '06/2027' })).body.code, 'NOTHING_TO_CHANGE');
+    const ok = await edit({ batchNo: 'E-1', expiry: '06/2029' });
+    assert.equal(ok.status, 201, JSON.stringify(ok.body));
+    assert.deepEqual([ok.body.reasonCode, ok.body.lines.map((l: { qtyDelta: number }) => l.qtyDelta)], ['BATCH_DETAILS_CORRECTED', [-30, 30]]);
+    const item = (await w.owner.call(itemGet, { params: { id: w.pcm.id } })).body;
+    assert.deepEqual(item.stock.batches.filter((b: { onHandBase: number }) => b.onHandBase > 0).map((b: { expiryDate: string; onHandBase: number }) => [b.expiryDate, b.onHandBase]), [['2029-06-30', 30]]);
+  } finally {
+    setClockForTests(null);
+  }
+});

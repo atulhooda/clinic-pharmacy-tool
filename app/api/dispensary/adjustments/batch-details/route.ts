@@ -20,10 +20,11 @@ export const POST = withSession({ permission: 'stock.adjust', idempotent: { stat
     mrpPaise: { type: 'int', min: 1, max: 10_000_000_000 },
     mrpUnitId: { type: 'uuid' },
     qtyBase: { type: 'int', min: 1, max: 2_000_000_000, optional: true, nullable: true },
+    fromBatchId: { type: 'uuid', optional: true, nullable: true },
   });
   // The batch fields are checked as a count line's new batch is.
   const [line] = parseCountLines([{ itemId: body.itemId, countedBase: 0, newBatch: { batchNo: body.batchNo, expiry: body.expiry, mrpPaise: body.mrpPaise, mrpUnitId: body.mrpUnitId } }]);
   if (!line.newBatch) throw new HttpError(422, 'FIELD_INVALID', 'Batch details are required.');
-  const id = await recordBatchDetails(s, { premisesId: body.premisesId.toLowerCase(), itemId: line.itemId, batch: line.newBatch, qtyBase: body.qtyBase ?? null }, grantFromRequest(req));
+  const id = await recordBatchDetails(s, { premisesId: body.premisesId.toLowerCase(), itemId: line.itemId, batch: line.newBatch, qtyBase: body.qtyBase ?? null, fromBatchId: body.fromBatchId?.toLowerCase() ?? null }, grantFromRequest(req));
   return json(await getAdjustment(s, id), { status: 201 });
 });
