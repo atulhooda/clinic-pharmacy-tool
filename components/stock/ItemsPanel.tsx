@@ -96,6 +96,41 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
   };
 
   /** D-58: an expired batch leaves for good (all of it at the premises), signed. */
+  /** Delete: its stock goes to 0 (counted out, or written off from quarantine), then it leaves the list. History stays. */
+  async function deleteItem() {
+    if (!open) return;
+    const qty = open.stock?.onHandBase ?? 0;
+    if (!window.confirm(qty > 0 ? t.deleteConfirmStock(open.displayName, packs(qty, open.baseUnit, open.units)) : t.deleteConfirm(open.displayName))) return;
+    setError(null);
+    const batches = (open.stock?.batches ?? []).filter((b) => b.onHandBase > 0);
+    const shelf = batches.filter((b) => b.locations.some((l) => l.kind !== 'QUARANTINE' && l.onHandBase > 0));
+    const quarantined = batches.filter((b) => b.locations.some((l) => l.kind === 'QUARANTINE' && l.onHandBase > 0));
+    const untracked = (open.stock?.untracked ?? []).filter((u) => u.onHandBase > 0 && u.kind !== 'QUARANTINE');
+    const byPremises = new Set([...shelf, ...quarantined].map((b) => b.premisesId).concat(untracked.map((u) => u.premisesId)));
+    for (const premisesId of byPremises) {
+      const lines = [...shelf.filter((b) => b.premisesId === premisesId).map((b) => ({ itemId: open.id, batchId: b.id, countedBase: 0 })),
+        ...(untracked.some((u) => u.premisesId === premisesId) ? [{ itemId: open.id, countedBase: 0 }] : [])];
+      if (lines.length) {
+        const grant = await withGrant('stock.adjust', premisesId);
+        if (!grant) return;
+        const r = await api('/api/dispensary/adjustments', { grant, body: { premisesId, reasonCode: 'OTHER', note: 'Item deleted', lines } });
+        if (!r.ok && r.body.code !== 'NOTHING_TO_CHANGE') return setError(r.body.error ?? en.settings.failed);
+      }
+      const q = quarantined.filter((b) => b.premisesId === premisesId);
+      if (q.length) {
+        const grant = await withGrant('stock.writeoff', premisesId);
+        if (!grant) return;
+        const r = await api('/api/dispensary/adjustments/write-off', { grant, body: { premisesId, kind: 'DAMAGE_WRITEOFF', reasonCode: 'OTHER', note: 'Item deleted',
+          lines: q.map((b) => ({ itemId: open.id, batchId: b.id })) } });
+        if (!r.ok) return setError(r.body.error ?? en.settings.failed);
+      }
+    }
+    const r = await api(`/api/dispensary/items/${open.id}`, { method: 'PATCH', body: { active: false } });
+    if (!r.ok) return setError(r.body.error ?? en.settings.failed);
+    setOpen(null);
+    await load('');
+  }
+
   async function writeOffBatch(b: BatchRow) {
     if (!open || !window.confirm(t.writeOffConfirm)) return;
     setError(null);
@@ -259,7 +294,10 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
           <div className="space-y-5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-small text-muted">{open.category} · {open.baseUnit}</p>
-              {canAdjust && <Button variant="brutal-blue" onClick={() => setAdjusting(open)}>{t.adjust.button}</Button>}
+              <span className="flex flex-wrap gap-2">
+                {canEdit && canAdjust && open.active && <Button onClick={() => void deleteItem()}>{t.delete}</Button>}
+                {canAdjust && <Button variant="brutal-blue" onClick={() => setAdjusting(open)}>{t.adjust.button}</Button>}
+              </span>
             </div>
             <section className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
