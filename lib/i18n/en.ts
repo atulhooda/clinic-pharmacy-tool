@@ -213,6 +213,8 @@ export const en = {
     noteHint: 'Shown on the Stock list, e.g. what still needs doing for this item.',
     writeOff: 'Write off',
     delete: 'Delete',
+    deletePasswordTitle: 'Delete password',
+    deletePassword: 'The clinic\'s password for deleting medicines',
     deleteConfirm: (name: string) => `Delete ${name}? It leaves the Stock list (its history stays; "Show removed" can bring it back).`,
     deleteConfirmStock: (name: string, qty: string) => `Delete ${name}? Its stock (${qty}) goes to 0 and it leaves the Stock list. The history stays; "Show removed" can bring it back.`,
     writeOffConfirm: 'Write off all of this expired batch? It leaves the stock for good (the record stays).',

@@ -297,3 +297,23 @@ test('delete a medicine: needs a signature for that item; stock to 0 (shelf coun
     setClockForTests(null);
   }
 });
+
+test('D-64: with a clinic delete password set, only it deletes (not the login password); wrong ones lock out after 5', async () => {
+  setClockForTests(T0);
+  const { hashPassword } = await import('../lib/auth/password');
+  process.env.ITEM_DELETE_PASSWORD_HASH = await hashPassword('synthetic-delete-pass-1');
+  try {
+    const w = await stockWorld('adj14');
+    const del = (id: string, body: Record<string, unknown>) => w.owner.call(itemDelete, { method: 'DELETE', params: { id }, body, headers: { 'idempotency-key': randomUUID() } });
+    assert.equal((await del(w.glv.id, { deletePassword: w.aa.password })).body.code, 'WRONG_DELETE_PASSWORD', 'the login password is not the delete password');
+    const ok = await del(w.glv.id, { deletePassword: 'synthetic-delete-pass-1' });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal((await w.owner.call(itemGet, { params: { id: w.glv.id } })).body.active, false);
+    for (let i = 0; i < 4; i++) await del(w.pcm.id, { deletePassword: 'nope' });
+    assert.equal((await del(w.pcm.id, { deletePassword: 'nope' })).body.code, 'WRONG_DELETE_PASSWORD');
+    assert.equal((await del(w.pcm.id, { deletePassword: 'synthetic-delete-pass-1' })).body.code, 'TOO_MANY_TRIES', 'locked for 15 minutes after 5 wrong');
+  } finally {
+    delete process.env.ITEM_DELETE_PASSWORD_HASH;
+    setClockForTests(null);
+  }
+});

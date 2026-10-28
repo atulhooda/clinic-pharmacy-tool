@@ -372,14 +372,32 @@ export async function writeOff(s: Session, input: WriteOffInput, grantId: Grant)
  * its stock at the caller's premises goes to 0 (shelf counted out, quarantine written off) and it leaves the
  * list (active = false). The ledger keeps everything; "Show removed" brings it back.
  */
-export async function deleteItem(s: Session, itemId: string, grantId: string | undefined): Promise<void> {
+/** D-64: wrong delete passwords per session, in memory: after 5 the session must wait 15 minutes. */
+const deleteTries = new Map<string, { n: number; until: number }>();
+
+export async function deleteItem(s: Session, itemId: string, grantId: string | undefined, deletePassword?: string): Promise<void> {
   if (!s.permissions.has('stock.items') || !s.permissions.has('stock.writeoff')) throw new HttpError(403, 'forbidden', 'Only the owner can delete a medicine.');
   await withTenant(s.orgId, async (db) => {
     if ((await db.rows('SELECT 1 FROM items WHERE org_id = $1 AND id = $2', [s.orgId, itemId])).length === 0) throw new HttpError(404, 'ITEM_NOT_FOUND', 'No such item.');
   });
-  // The one signature for the whole delete, consumed before anything moves.
-  const { withSessionTx } = await import('../auth/guard');
-  await withSessionTx(s, (db) => consumeGrant(db, s, 'stock.adjust', itemId, grantId));
+  // D-64: when the clinic has a delete password (ITEM_DELETE_PASSWORD_HASH, a scrypt hash in env), it alone
+  // authorises a delete; otherwise the one signed grant (D-63, the login password) does.
+  const hash = process.env.ITEM_DELETE_PASSWORD_HASH;
+  if (hash) {
+    const t = deleteTries.get(s.sid) ?? { n: 0, until: 0 };
+    if (t.until > Date.now()) throw new HttpError(429, 'TOO_MANY_TRIES', 'Too many wrong passwords. Try again in 15 minutes.');
+    const { verifyPassword } = await import('../auth/password');
+    if (!deletePassword || !(await verifyPassword(deletePassword, hash))) {
+      const n = t.n + 1;
+      deleteTries.set(s.sid, n >= 5 ? { n: 0, until: Date.now() + 15 * 60_000 } : { n, until: 0 });
+      throw new HttpError(403, 'WRONG_DELETE_PASSWORD', 'That is not the delete password.');
+    }
+    deleteTries.delete(s.sid);
+  } else {
+    // The one signature for the whole delete, consumed before anything moves.
+    const { withSessionTx } = await import('../auth/guard');
+    await withSessionTx(s, (db) => consumeGrant(db, s, 'stock.adjust', itemId, grantId));
+  }
   const held = await withTenant(s.orgId, (db) => db.rows<{ premisesId: string; batchId: string | null; locationId: string; kind: string; n: number }>(
     `SELECT b.premises_id AS "premisesId", b.batch_id AS "batchId", b.location_id AS "locationId", l.kind, b.on_hand AS n FROM stock_balances b
        JOIN stock_locations l ON l.org_id = b.org_id AND l.id = b.location_id

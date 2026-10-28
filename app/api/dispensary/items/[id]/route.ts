@@ -22,6 +22,11 @@ export const PATCH = withSession<Ctx>({ permission: 'stock.items', idempotent: {
 
 /** Delete a medicine (founder, 2026-10-28): stock to 0 and off the list, signed (`stock.adjust` grant for the item, asked as the password). */
 export const DELETE = withSession<Ctx>({ permission: 'stock.adjust' }, async (req, ctx, s) => {
-  await deleteItem(s, pathId(ctx.params.id, 'ITEM_NOT_FOUND', 'No such item.'), grantFromRequest(req));
+  // D-64: the delete password, when the clinic has one, comes in the body (never logged).
+  const text = await req.text();
+  let deletePassword: string | undefined;
+  try { const b = text ? JSON.parse(text) : {}; deletePassword = typeof b.deletePassword === 'string' ? b.deletePassword.slice(0, 200) : undefined; } catch { /* no body */ }
+  await deleteItem(s, pathId(ctx.params.id, 'ITEM_NOT_FOUND', 'No such item.'), grantFromRequest(req), deletePassword);
   return json({ ok: true });
 });
+

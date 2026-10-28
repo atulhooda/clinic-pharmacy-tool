@@ -97,15 +97,29 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
 
   /** D-58: an expired batch leaves for good (all of it at the premises), signed. */
   /** Delete: its stock goes to 0 (counted out, or written off from quarantine), then it leaves the list. History stays. */
+  const [deleting, setDeleting] = useState<{ password: string; error: string | null; busy: boolean } | null>(null);
+  /** D-64: Delete asks for the clinic's delete password (not the login password). */
   async function deleteItem() {
     if (!open) return;
     const qty = open.stock?.onHandBase ?? 0;
     if (!window.confirm(qty > 0 ? t.deleteConfirmStock(open.displayName, packs(qty, open.baseUnit, open.units)) : t.deleteConfirm(open.displayName))) return;
     setError(null);
-    const grant = await withGrant('stock.adjust', open.id, { passwordOnly: true });
-    if (!grant) return;
-    const r = await api(`/api/dispensary/items/${open.id}`, { method: 'DELETE', grant });
-    if (!r.ok) return setError(r.body.error ?? en.settings.failed);
+    setDeleting({ password: '', error: null, busy: false });
+  }
+  async function confirmDelete(e: FormEvent) {
+    e.preventDefault();
+    if (!open || !deleting) return;
+    setDeleting({ ...deleting, busy: true, error: null });
+    let r = await api(`/api/dispensary/items/${open.id}`, { method: 'DELETE', body: { deletePassword: deleting.password } });
+    if (r.body.code === 'reauth_required') {
+      // No delete password set for this clinic: the login password confirms instead.
+      setDeleting(null);
+      const grant = await withGrant('stock.adjust', open.id, { passwordOnly: true });
+      if (!grant) return;
+      r = await api(`/api/dispensary/items/${open.id}`, { method: 'DELETE', grant });
+    }
+    if (!r.ok) return setDeleting((d) => (d ? { ...d, busy: false, password: '', error: r.body.error ?? en.settings.failed } : d));
+    setDeleting(null);
     setOpen(null);
     await load('');
   }
@@ -391,6 +405,20 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
         )}
       </Sheet>
       {grantDialog}
+      {deleting && (
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-10 flex items-center justify-center bg-black/30 px-4">
+          <form onSubmit={confirmDelete} className="w-full max-w-sm space-y-4 rounded-xl2 border border-hairline bg-surface p-6 shadow-card" noValidate>
+            <h2 className="text-h2">{t.deletePasswordTitle}</h2>
+            <TextField label={t.deletePassword} type="password" autoFocus autoComplete="off" value={deleting.password}
+              onChange={(ev) => setDeleting({ ...deleting, password: ev.target.value })} />
+            {deleting.error && <p role="alert" className="rounded-xl2 bg-bad-wash px-3 py-2 text-small text-bad-ink">{deleting.error}</p>}
+            <div className="flex gap-3">
+              <Button type="button" onClick={() => setDeleting(null)}>{en.reauth.cancel}</Button>
+              <Button type="submit" variant="brutal-blue" disabled={deleting.busy || !deleting.password}>{t.delete}</Button>
+            </div>
+          </form>
+        </div>
+      )}
       <AdjustStockSheet item={adjusting} onClose={() => setAdjusting(null)} onDone={() => void adjusted()} />
       <BatchDetailsSheet stock={detailing} onClose={() => setDetailing(null)} onDone={() => { const id = detailing?.itemId; setDetailing(null); void load(''); if (id) void reopen(id); }} />
     </div>
