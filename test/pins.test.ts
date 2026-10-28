@@ -176,7 +176,7 @@ test('DPN-14: a stock-only role gets no signing PIN; someone who needs one and h
   await db.signIn(org.slug, doctor.login, doctor.password);
   assert.equal((await db.call(meRoute)).body.needsSigningPin, true);
   const g = await db.call(reauthRoute, { body: { password: doctor.password, purpose: 'prescription.verify', entityId: NONEXIST } });
-  assert.deepEqual([g.status, g.body.code], [409, 'signing_pin_not_set']);
+  assert.equal(g.status, 201, 'D-63: the login password confirms, with or without a signing PIN set');
 });
 
 test('DPN-15: a PIN hash checked under a different pepper fails; the pepper is in no table, migration or log line', async () => {

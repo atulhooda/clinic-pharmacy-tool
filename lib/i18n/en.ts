@@ -67,11 +67,11 @@ export const en = {
     failed: 'Could not save the PIN. Try again.',
   },
   reauth: {
-    title: 'Confirm with your signing PIN',
+    title: 'Confirm with your password',
     pin: 'Signing PIN',
     usePassword: 'Use my password instead',
     usePin: 'Use my signing PIN',
-    password: 'Password',
+    password: 'Your login password',
     submit: 'Confirm',
     cancel: 'Cancel',
     wrong: 'That is not right.',

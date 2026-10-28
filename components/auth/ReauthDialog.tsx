@@ -13,7 +13,9 @@ const field = 'field-input mt-1';
 export function ReauthDialog({ purpose, entityId, onGrant, onCancel, passwordOnly = false }: {
   purpose: string; entityId: string; onGrant: (grantId: string) => void; onCancel: () => void; passwordOnly?: boolean;
 }) {
-  const [usePassword, setUsePassword] = useState(passwordOnly);
+  // D-63: confirmations use the login password; the PIN option stays for callers that ask for it.
+  const usePassword = true;
+  void passwordOnly;
   const [secret, setSecret] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -45,11 +47,6 @@ export function ReauthDialog({ purpose, entityId, onGrant, onCancel, passwordOnl
           <input autoFocus className={field} type="password" inputMode={usePassword ? 'text' : 'numeric'} autoComplete="off"
             value={secret} onChange={(e) => setSecret(usePassword ? e.target.value : e.target.value.replace(/\D/g, '').slice(0, 6))} />
         </label>
-        {!passwordOnly && (
-          <button type="button" onClick={() => { setUsePassword(!usePassword); setSecret(''); }} className="text-small text-brand">
-            {usePassword ? t.usePin : t.usePassword}
-          </button>
-        )}
         {error && <p role="alert" className="rounded-xl2 bg-bad-wash px-3 py-2 text-small text-bad-ink">{error}</p>}
         <div className="flex gap-3">
           <button type="button" onClick={onCancel} className="min-h-tap rounded-xl2 px-4 text-small font-semibold text-muted">{t.cancel}</button>

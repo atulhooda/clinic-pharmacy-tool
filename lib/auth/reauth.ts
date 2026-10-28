@@ -38,8 +38,8 @@ export async function issueGrant(
   if (input.pin !== undefined && input.password !== undefined) {
     throw new HttpError(422, 'FIELD_INVALID', 'Send the signing PIN or the password, not both.', { field: 'password', rule: 'exclusive' });
   }
-  // §3.7: someone who needs a signing PIN and has none sets it first.
-  if (!s.hasSigningPin && (input.pin !== undefined || holdsPinGatedPermission(s.permissions))) {
+  // §3.7, D-63: confirmations are made with the login password (founder, 2026-10-28); a PIN is only checked if one is sent.
+  if (!s.hasSigningPin && input.pin !== undefined) {
     throw new HttpError(409, 'signing_pin_not_set', 'Set your signing PIN first.');
   }
   const tries = await takeSecretTry(s);
