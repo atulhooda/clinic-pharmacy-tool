@@ -44,7 +44,7 @@ import { PATCH as dLocation } from '../app/api/dispensary/locations/[id]/route';
 import { GET as dMaster } from '../app/api/dispensary/master/route';
 import { GET as dMasterOne } from '../app/api/dispensary/master/[id]/route';
 import { GET as dItems, POST as dItemsPost } from '../app/api/dispensary/items/route';
-import { GET as dItem, PATCH as dItemPatch } from '../app/api/dispensary/items/[id]/route';
+import { GET as dItem, PATCH as dItemPatch, DELETE as dItemDelete } from '../app/api/dispensary/items/[id]/route';
 import { POST as dUnitPost } from '../app/api/dispensary/items/[id]/units/route';
 import { GET as dMovements } from '../app/api/dispensary/items/[id]/movements/route';
 import { GET as dGrns, POST as dGrnPost } from '../app/api/dispensary/goods-receipts/route';
@@ -156,7 +156,7 @@ const HANDLERS: Record<string, Record<string, unknown>> = {
   '/api/dispensary/master': { GET: dMaster },
   '/api/dispensary/master/[id]': { GET: dMasterOne },
   '/api/dispensary/items': { GET: dItems, POST: dItemsPost },
-  '/api/dispensary/items/[id]': { GET: dItem, PATCH: dItemPatch },
+  '/api/dispensary/items/[id]': { GET: dItem, PATCH: dItemPatch, DELETE: dItemDelete },
   '/api/dispensary/items/[id]/movements': { GET: dMovements },
   '/api/dispensary/items/[id]/units': { POST: dUnitPost },
   '/api/dispensary/items/[id]/units/[unitId]': { PATCH: dUnitPatch },

@@ -117,14 +117,21 @@ async function pendingBatch(db: Db, orgId: string, premisesId: string, itemId: s
 }
 
 /** E-34 POST (count kinds): count lines → one OPENING_BALANCE or STOCKTAKE_ADJUSTMENT document. */
-export async function adjustStock(s: Session, input: AdjustInput, grantId: string | undefined): Promise<string> {
+/** Passed as the grant by deleteItem, which has consumed its own signed grant already. Never comes from a request. */
+export const ALREADY_SIGNED = Symbol('already signed');
+type Grant = string | undefined | typeof ALREADY_SIGNED;
+const consume = async (db: Db, s: Session, purpose: 'stock.adjust' | 'stock.writeoff', entityId: string, grant: Grant) => {
+  if (grant !== ALREADY_SIGNED) await consumeGrant(db, s, purpose, entityId, grant);
+};
+
+export async function adjustStock(s: Session, input: AdjustInput, grantId: Grant): Promise<string> {
   requirePremises(s, input.premisesId);
   const reason = input.reasonCode;
   if (reason !== null && !(COUNT_REASONS as readonly string[]).includes(reason)) throw bad('reasonCode', 'enum');
   if (reason === 'OTHER' && !input.note) throw new HttpError(422, 'NOTE_REQUIRED', 'Say what happened when the reason is "other".');
   return withStockTx(s, async (db) => {
     const locations = await premisesReady(db, s.orgId, input.premisesId);
-    await consumeGrant(db, s, 'stock.adjust', input.premisesId, grantId);
+    await consume(db, s, 'stock.adjust', input.premisesId, grantId);
     const today = todayIst();
     const itemIds = [...new Set(input.lines.map((l) => l.itemId))];
     const items = new Map((await db.rows<ItemInfo>(
@@ -314,7 +321,7 @@ export interface WriteOffInput {
  * expired batch (the database refuses one that is not, L-7); a damage write-off any. Quarantined stock
  * can only leave this way (L-20). Signed with the `stock.writeoff` grant for the premises.
  */
-export async function writeOff(s: Session, input: WriteOffInput, grantId: string | undefined): Promise<string> {
+export async function writeOff(s: Session, input: WriteOffInput, grantId: Grant): Promise<string> {
   requirePremises(s, input.premisesId);
   if (!(input.kind in WRITE_OFF_REASONS)) throw bad('kind', 'enum');
   if (!(WRITE_OFF_REASONS[input.kind] as readonly string[]).includes(input.reasonCode)) throw new HttpError(422, 'REASON_REQUIRED', 'Choose why this stock is written off.');
@@ -322,7 +329,7 @@ export async function writeOff(s: Session, input: WriteOffInput, grantId: string
   if (input.lines.length === 0 || input.lines.length > MAX_LINES) throw bad('lines', 'length');
   return withStockTx(s, async (db) => {
     const locations = await premisesReady(db, s.orgId, input.premisesId);
-    await consumeGrant(db, s, 'stock.writeoff', input.premisesId, grantId);
+    await consume(db, s, 'stock.writeoff', input.premisesId, grantId);
     await lockBalances(db, s.orgId, input.lines.flatMap((l) => locations.map((x) => ({ itemId: l.itemId, locationId: x.id }))));
     const moves: { itemId: string; batchId: string | null; locationId: string; qty: number }[] = [];
     for (const [i, l] of input.lines.entries()) {
@@ -358,6 +365,37 @@ export async function writeOff(s: Session, input: WriteOffInput, grantId: string
       sessionId: s.sid, deviceId: s.deviceId, entityId: header, detail: { kind: input.kind.toLowerCase(), count: moves.length, reason: input.reasonCode.toLowerCase() } });
     return header;
   });
+}
+
+/**
+ * Delete a medicine (founder, 2026-10-28): signed with the password (a `stock.adjust` grant for the item),
+ * its stock at the caller's premises goes to 0 (shelf counted out, quarantine written off) and it leaves the
+ * list (active = false). The ledger keeps everything; "Show removed" brings it back.
+ */
+export async function deleteItem(s: Session, itemId: string, grantId: string | undefined): Promise<void> {
+  if (!s.permissions.has('stock.items') || !s.permissions.has('stock.writeoff')) throw new HttpError(403, 'forbidden', 'Only the owner can delete a medicine.');
+  await withTenant(s.orgId, async (db) => {
+    if ((await db.rows('SELECT 1 FROM items WHERE org_id = $1 AND id = $2', [s.orgId, itemId])).length === 0) throw new HttpError(404, 'ITEM_NOT_FOUND', 'No such item.');
+  });
+  // The one signature for the whole delete, consumed before anything moves.
+  const { withSessionTx } = await import('../auth/guard');
+  await withSessionTx(s, (db) => consumeGrant(db, s, 'stock.adjust', itemId, grantId));
+  const held = await withTenant(s.orgId, (db) => db.rows<{ premisesId: string; batchId: string | null; locationId: string; kind: string; n: number }>(
+    `SELECT b.premises_id AS "premisesId", b.batch_id AS "batchId", b.location_id AS "locationId", l.kind, b.on_hand AS n FROM stock_balances b
+       JOIN stock_locations l ON l.org_id = b.org_id AND l.id = b.location_id
+      WHERE b.org_id = $1 AND b.item_id = $2 AND b.on_hand > 0 AND b.premises_id = ANY($3::uuid[])`, [s.orgId, itemId, s.premises.map((p) => p.id)]));
+  for (const premisesId of new Set(held.map((h) => h.premisesId))) {
+    const shelf = held.filter((h) => h.premisesId === premisesId && h.kind !== 'QUARANTINE');
+    if (shelf.length) {
+      await adjustStock(s, { premisesId, reasonCode: 'OTHER', note: 'Item deleted',
+        lines: shelf.map((h) => ({ itemId, batchId: h.batchId, newBatch: null, locationId: h.locationId, countedBase: 0, pendingDetails: false })) }, ALREADY_SIGNED)
+        .catch((e) => { if (!(e instanceof HttpError && e.code === 'NOTHING_TO_CHANGE')) throw e; });
+    }
+    const q = held.filter((h) => h.premisesId === premisesId && h.kind === 'QUARANTINE');
+    if (q.length) await writeOff(s, { premisesId, kind: 'DAMAGE_WRITEOFF', reasonCode: 'OTHER', note: 'Item deleted', lines: q.map((h) => ({ itemId, batchId: h.batchId, qtyBase: null })) }, ALREADY_SIGNED);
+  }
+  const { patchItem } = await import('./items');
+  await patchItem(s, itemId, { active: false });
 }
 
 // ---------------------------------------------------------------- reads

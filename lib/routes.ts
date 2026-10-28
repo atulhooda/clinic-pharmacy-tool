@@ -73,6 +73,7 @@ export const ROUTES: readonly RouteEntry[] = [
   { path: '/api/dispensary/items', methods: ['POST'], access: { permission: 'stock.items' }, endpoint: 'E-13' },
   { path: '/api/dispensary/items/[id]', methods: ['GET'], access: { permission: 'stock.view' }, endpoint: 'E-14' },
   { path: '/api/dispensary/items/[id]', methods: ['PATCH'], access: { permission: 'stock.items' }, endpoint: 'E-15' },
+  { path: '/api/dispensary/items/[id]', methods: ['DELETE'], access: { permission: 'stock.adjust' }, endpoint: 'E-15', reauth: 'stock.adjust' },
   { path: '/api/dispensary/items/[id]/movements', methods: ['GET'], access: { permission: 'stock.view' }, endpoint: 'E-18' },
   { path: '/api/dispensary/items/[id]/units', methods: ['POST'], access: { permission: 'stock.items' }, endpoint: 'E-16' },
   { path: '/api/dispensary/items/[id]/units/[unitId]', methods: ['PATCH'], access: { permission: 'stock.items' }, endpoint: 'E-17' },

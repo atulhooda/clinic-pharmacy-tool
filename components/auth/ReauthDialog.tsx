@@ -10,10 +10,10 @@ const field = 'field-input mt-1';
  * Asks for the signing PIN (or the password) and returns a single-use grant (A-12, 06a §3.7).
  * The caller sends it in the Reauth-Grant header of the one request it confirms.
  */
-export function ReauthDialog({ purpose, entityId, onGrant, onCancel }: {
-  purpose: string; entityId: string; onGrant: (grantId: string) => void; onCancel: () => void;
+export function ReauthDialog({ purpose, entityId, onGrant, onCancel, passwordOnly = false }: {
+  purpose: string; entityId: string; onGrant: (grantId: string) => void; onCancel: () => void; passwordOnly?: boolean;
 }) {
-  const [usePassword, setUsePassword] = useState(false);
+  const [usePassword, setUsePassword] = useState(passwordOnly);
   const [secret, setSecret] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -45,9 +45,11 @@ export function ReauthDialog({ purpose, entityId, onGrant, onCancel }: {
           <input autoFocus className={field} type="password" inputMode={usePassword ? 'text' : 'numeric'} autoComplete="off"
             value={secret} onChange={(e) => setSecret(usePassword ? e.target.value : e.target.value.replace(/\D/g, '').slice(0, 6))} />
         </label>
-        <button type="button" onClick={() => { setUsePassword(!usePassword); setSecret(''); }} className="text-small text-brand">
-          {usePassword ? t.usePin : t.usePassword}
-        </button>
+        {!passwordOnly && (
+          <button type="button" onClick={() => { setUsePassword(!usePassword); setSecret(''); }} className="text-small text-brand">
+            {usePassword ? t.usePin : t.usePassword}
+          </button>
+        )}
         {error && <p role="alert" className="rounded-xl2 bg-bad-wash px-3 py-2 text-small text-bad-ink">{error}</p>}
         <div className="flex gap-3">
           <button type="button" onClick={onCancel} className="min-h-tap rounded-xl2 px-4 text-small font-semibold text-muted">{t.cancel}</button>

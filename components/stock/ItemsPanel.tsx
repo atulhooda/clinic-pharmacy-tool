@@ -102,30 +102,9 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
     const qty = open.stock?.onHandBase ?? 0;
     if (!window.confirm(qty > 0 ? t.deleteConfirmStock(open.displayName, packs(qty, open.baseUnit, open.units)) : t.deleteConfirm(open.displayName))) return;
     setError(null);
-    const batches = (open.stock?.batches ?? []).filter((b) => b.onHandBase > 0);
-    const shelf = batches.filter((b) => b.locations.some((l) => l.kind !== 'QUARANTINE' && l.onHandBase > 0));
-    const quarantined = batches.filter((b) => b.locations.some((l) => l.kind === 'QUARANTINE' && l.onHandBase > 0));
-    const untracked = (open.stock?.untracked ?? []).filter((u) => u.onHandBase > 0 && u.kind !== 'QUARANTINE');
-    const byPremises = new Set([...shelf, ...quarantined].map((b) => b.premisesId).concat(untracked.map((u) => u.premisesId)));
-    for (const premisesId of byPremises) {
-      const lines = [...shelf.filter((b) => b.premisesId === premisesId).map((b) => ({ itemId: open.id, batchId: b.id, countedBase: 0 })),
-        ...(untracked.some((u) => u.premisesId === premisesId) ? [{ itemId: open.id, countedBase: 0 }] : [])];
-      if (lines.length) {
-        const grant = await withGrant('stock.adjust', premisesId);
-        if (!grant) return;
-        const r = await api('/api/dispensary/adjustments', { grant, body: { premisesId, reasonCode: 'OTHER', note: 'Item deleted', lines } });
-        if (!r.ok && r.body.code !== 'NOTHING_TO_CHANGE') return setError(r.body.error ?? en.settings.failed);
-      }
-      const q = quarantined.filter((b) => b.premisesId === premisesId);
-      if (q.length) {
-        const grant = await withGrant('stock.writeoff', premisesId);
-        if (!grant) return;
-        const r = await api('/api/dispensary/adjustments/write-off', { grant, body: { premisesId, kind: 'DAMAGE_WRITEOFF', reasonCode: 'OTHER', note: 'Item deleted',
-          lines: q.map((b) => ({ itemId: open.id, batchId: b.id })) } });
-        if (!r.ok) return setError(r.body.error ?? en.settings.failed);
-      }
-    }
-    const r = await api(`/api/dispensary/items/${open.id}`, { method: 'PATCH', body: { active: false } });
+    const grant = await withGrant('stock.adjust', open.id, { passwordOnly: true });
+    if (!grant) return;
+    const r = await api(`/api/dispensary/items/${open.id}`, { method: 'DELETE', grant });
     if (!r.ok) return setError(r.body.error ?? en.settings.failed);
     setOpen(null);
     await load('');

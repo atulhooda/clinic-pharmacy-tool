@@ -3,6 +3,8 @@ import { strictBody } from '@/lib/http/body';
 import { withSession } from '@/lib/http/session-route';
 import { getItem, patchItem, type ItemPatch } from '@/lib/stock/items';
 import { ITEM_PATCH, pathId } from '@/lib/stock/schemas';
+import { grantFromRequest } from '@/lib/auth/reauth';
+import { deleteItem } from '@/lib/stock/adjustments';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: { id: string } };
@@ -16,4 +18,10 @@ export const PATCH = withSession<Ctx>({ permission: 'stock.items', idempotent: {
   replay: (s, _rid, ctx) => getItem(s, pathId(ctx.params.id, 'ITEM_NOT_FOUND', 'No such item.')) } }, async (req, ctx, s) => {
   const body = await strictBody(req, ITEM_PATCH);
   return json(await patchItem(s, pathId(ctx.params.id, 'ITEM_NOT_FOUND', 'No such item.'), body as ItemPatch));
+});
+
+/** Delete a medicine (founder, 2026-10-28): stock to 0 and off the list, signed (`stock.adjust` grant for the item, asked as the password). */
+export const DELETE = withSession<Ctx>({ permission: 'stock.adjust' }, async (req, ctx, s) => {
+  await deleteItem(s, pathId(ctx.params.id, 'ITEM_NOT_FOUND', 'No such item.'), grantFromRequest(req));
+  return json({ ok: true });
 });

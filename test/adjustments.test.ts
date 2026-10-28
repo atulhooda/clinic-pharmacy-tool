@@ -12,7 +12,8 @@ import { POST as adjPost, GET as adjList } from '../app/api/dispensary/adjustmen
 import { GET as adjGet } from '../app/api/dispensary/adjustments/[id]/route';
 import { POST as detailsPost } from '../app/api/dispensary/adjustments/batch-details/route';
 import { POST as writeOffPost } from '../app/api/dispensary/adjustments/write-off/route';
-import { GET as itemGet } from '../app/api/dispensary/items/[id]/route';
+import { GET as itemGet, DELETE as itemDelete } from '../app/api/dispensary/items/[id]/route';
+import { POST as reauthRoute } from '../app/api/auth/reauth/route';
 import { GET as hintGet } from '../app/api/dispensary/items/[id]/batch-hint/route';
 import { POST as grnsPost } from '../app/api/dispensary/goods-receipts/route';
 import { POST as suppliersPost } from '../app/api/dispensary/suppliers/route';
@@ -270,6 +271,28 @@ test('D-61: an expiry typed wrong (stock in quarantine) is corrected onto the sh
     assert.equal((await asOwnerIn(w.org.orgId, `INSERT INTO stock_movements (org_id, premises_id, item_id, batch_id, location_id, movement_type, qty_delta, reference_type, reference_id, reason_code, actor_staff_id, actor_label, occurred_at, recorded_at)
       SELECT $1, $2, $3, $4, $5, 'STOCKTAKE_ADJUSTMENT', -1, 'STOCK_ADJUSTMENT_LINE', gen_random_uuid(), 'COUNT_CORRECTION', $6, 'x', now(), now()`,
       [w.org.orgId, w.main.id, w.pcm.id, from, w.main.quarantine, w.aa.id]))?.hint, 'QUARANTINED', 'the database still refuses any other count out of quarantine');
+  } finally {
+    setClockForTests(null);
+  }
+});
+
+test('delete a medicine: needs a signature for that item; stock to 0 (shelf counted out, quarantine written off); off the list', async () => {
+  setClockForTests(T0);
+  try {
+    const w = await stockWorld('adj13');
+    await adjust(w, { lines: [{ itemId: w.pcm.id, newBatch: { batchNo: 'D-1', expiry: '06/2028', mrpPaise: 4500, mrpUnitId: w.pcm.packUnitId }, countedBase: 30 }] });
+    await adjust(w, { lines: [{ itemId: w.pcm.id, newBatch: { batchNo: 'D-OLD', expiry: '03/2026', mrpPaise: 4500, mrpUnitId: w.pcm.packUnitId }, countedBase: 5 }] });
+    const del = async (headers: Record<string, string> = {}) => w.owner.call(itemDelete, { method: 'DELETE', params: { id: w.pcm.id }, headers: { 'idempotency-key': randomUUID(), ...headers } });
+    assert.equal((await del()).body.code, 'reauth_required', 'no signature, no delete');
+    const wrongEntity = await grant(w.owner, w.aa, 'stock.adjust', w.main.id);
+    assert.equal((await del({ 'reauth-grant': wrongEntity })).body.code, 'reauth_required', 'a grant for the premises is not one for this item');
+    const r = await w.owner.call(reauthRoute, { body: { password: w.aa.password, purpose: 'stock.adjust', entityId: w.pcm.id } });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    const ok = await del({ 'reauth-grant': r.body.grantId });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    const item = (await w.owner.call(itemGet, { params: { id: w.pcm.id } })).body;
+    assert.deepEqual([item.active, item.stock.onHandBase], [false, 0]);
+    assert.equal((await w.reception.call(itemDelete, { method: 'DELETE', params: { id: w.glv.id }, headers: { 'idempotency-key': randomUUID() } })).status, 403);
   } finally {
     setClockForTests(null);
   }
