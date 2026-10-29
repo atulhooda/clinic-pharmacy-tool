@@ -108,7 +108,7 @@ test('DO-02 / DO-03 / DO-04: an existing batch is reused; a different MRP is 409
   }
 });
 
-test('DM-04 / DM-05 / DM-06: at an RMP premises the supplier needs a licence (an expired one warns) and a medicine its manufacturer and address', async () => {
+test('DM-04 / DM-05 / DM-06 / D-65: at an RMP premises a supplier with no licence, or an expired one, warns and a medicine its manufacturer and address', async () => {
   setClockForTests(T0);
   try {
     const w = await stockWorld('dm4');
@@ -116,7 +116,7 @@ test('DM-04 / DM-05 / DM-06: at an RMP premises the supplier needs a licence (an
     const nolic = await supplier(w.owner, 'Local Traders dm4', { licences: [], validTill: null });
     const lapsed = await supplier(w.owner, 'Lapsed dm4', { validTill: '2026-01-01' });
     const r1 = await postIt(w.reception, (await draft(w, w.reception, nolic, [pcmLine(w)])).body.id);
-    assert.deepEqual([r1.status, r1.body.code], [422, 'SUPPLIER_LICENCE_MISSING']);
+    assert.deepEqual([r1.status, r1.body.warnings], [200, [{ code: 'SUPPLIER_LICENCE_MISSING' }]], 'D-65: a missing licence warns, the delivery posts');
     const r2 = await postIt(w.reception, (await draft(w, w.reception, lapsed, [pcmLine(w)])).body.id);
     assert.equal(r2.status, 200);
     assert.deepEqual(r2.body.warnings, [{ code: 'SUPPLIER_LICENCE_EXPIRED' }]);

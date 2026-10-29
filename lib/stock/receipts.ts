@@ -287,7 +287,8 @@ async function checks(db: Db, orgId: string, g: { id: string; premisesId: string
   if (g.invoiceDate > today) errors.push({ code: 'INVOICE_DATE_IN_FUTURE' });
   if (!supplier.active) errors.push({ code: 'SUPPLIER_INACTIVE' });
   // MR-03: at an RMP premises the supplier has a licence on file; an expired one only warns.
-  if (rmp && supplier.licences.length === 0) errors.push({ code: 'SUPPLIER_LICENCE_MISSING' });
+  // D-65: suppliers often leave their licence off the bill; a missing one warns, never blocks.
+  if (rmp && supplier.licences.length === 0) warnings.push({ code: 'SUPPLIER_LICENCE_MISSING' });
   else if (supplier.validTill && supplier.validTill < today) warnings.push({ code: 'SUPPLIER_LICENCE_EXPIRED' });
   const dup = await db.rows(`SELECT 1 FROM goods_receipts WHERE org_id = $1 AND supplier_id = $2 AND lower(invoice_no) = lower($3) AND status = 'POSTED' AND id <> $4`,
     [orgId, g.supplierId, g.invoiceNo, g.id]);
