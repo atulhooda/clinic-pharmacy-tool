@@ -38,7 +38,9 @@ const problemText = (p: Problem) => `${p.lineNo ? `${t.line} ${p.lineNo}: ` : ''
 
 /** E-24 … E-26: one delivery. A draft is edited and checked; a posted one is read-only. */
 export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
-  const { items } = useItems();
+  const { items, reload: reloadItems } = useItems();
+  // "+ New medicine" on a line: add one that is not in the list yet, then pick it (founder, 2026-10-30).
+  const [adding, setAdding] = useState<{ key: string; name: string; category: string; baseUnit: string; pack: string; per: string; busy: boolean } | null>(null);
   const suppliers = useSuppliers();
   const [grn, setGrn] = useState<Grn | null>(null);
   const [head, setHead] = useState({ supplierId: '', invoiceNo: '', invoiceDate: '', total: '', notes: '' });
@@ -66,7 +68,8 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
 
   useEffect(() => { void api<Grn>(`/api/dispensary/goods-receipts/${id}`).then((r) => r.ok && show(r.body)); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const itemOpts = useMemo(() => items.map(itemOption), [items]);
+  // Removed items (Delete / Remove) are not offered for new deliveries.
+  const itemOpts = useMemo(() => items.filter((i) => i.active).map(itemOption), [items]);
   const itemById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
   const supplierOpts = useMemo(() => suppliers.filter((s) => s.active).map((s) => ({ value: s.id, label: s.name,
     sub: `${s.gstin ?? 'No GSTIN'} · licence ${s.licenceStatus.toLowerCase().replace('_', ' ')}` })), [suppliers]);
@@ -77,6 +80,27 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
     const us = await loadUnits(itemId);
     const buy = us.filter((u) => u.purchasable && u.active).sort((a, b) => b.baseUnitsPerUnit - a.baseUnitsPerUnit)[0] ?? us[0];
     set(key, { itemId, purchaseUnitId: buy?.id ?? null, mrpUnitId: buy?.id ?? null });
+  }
+
+  async function addItem() {
+    if (!adding) return;
+    setError(null);
+    if (!adding.name.trim()) return setError(t.newItemName);
+    const per = adding.pack.trim() ? Number(adding.per) : 0;
+    if (adding.pack.trim() && !(Number.isInteger(per) && per > 1)) return setError(t.newItemPer);
+    setAdding({ ...adding, busy: true });
+    const r = await api<{ id: string }>('/api/dispensary/items', { body: { displayName: adding.name.trim(), category: adding.category, baseUnit: adding.baseUnit,
+      useFor: adding.category === 'CONSUMABLE' ? 'IN_CLINIC' : 'PATIENTS' } });
+    if (!r.ok) { setAdding({ ...adding, busy: false }); return setError(r.body.error ?? en.settings.failed); }
+    if (adding.pack.trim()) {
+      const u = await api(`/api/dispensary/items/${r.body.id}/units`, { body: { name: adding.pack.trim().toLowerCase(), baseUnitsPerUnit: per } });
+      if (!u.ok) setError(u.body.error ?? en.settings.failed);
+    }
+    await reloadItems();
+    setUnits((x) => { const { [r.body.id]: _drop, ...rest } = x; void _drop; return rest; });
+    const key = adding.key;
+    setAdding(null);
+    await pickItem(key, r.body.id);
   }
 
   /** The form as the API's lines, or the first problem a person must fix. */
@@ -188,10 +212,40 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
                   <span className="text-micro font-semibold uppercase tracking-wide text-faint">{t.line} {i + 1}</span>
                   <Button size="sm" onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}>{t.remove}</Button>
                 </div>
+                {adding?.key === l.key && (
+                  <div className="space-y-3 rounded-xl2 border border-hairline p-3">
+                    <p className="text-small font-semibold">{t.newItemTitle}</p>
+                    <TextField label={t.newItemName} value={adding.name} maxLength={120} autoFocus onChange={(e) => setAdding({ ...adding, name: e.target.value })} />
+                    <div className="grid grid-cols-2 gap-3">
+                      <SelectField label={t.newItemType} value={adding.category} onChange={(e) => {
+                        const c = e.target.value; setAdding({ ...adding, category: c, ...(c === 'MEDICINE' ? { baseUnit: 'TABLET', pack: 'strip', per: '10' } : { baseUnit: 'PIECE', pack: '', per: '' }) });
+                      }}>
+                        <option value="MEDICINE">{t.typeMedicine}</option>
+                        <option value="RETAIL_PRODUCT">{t.typeRetail}</option>
+                        <option value="INJECTABLE">{t.typeInjectable}</option>
+                        <option value="CONSUMABLE">{t.typeConsumable}</option>
+                      </SelectField>
+                      <SelectField label={t.newItemUnit} value={adding.baseUnit} onChange={(e) => setAdding({ ...adding, baseUnit: e.target.value })}>
+                        {['TABLET', 'CAPSULE', 'PIECE', 'ML', 'G', 'VIAL', 'UNIT'].map((u) => <option key={u} value={u}>{u.toLowerCase()}</option>)}
+                      </SelectField>
+                      <TextField label={t.newItemPack} placeholder="strip, box, bottle…" value={adding.pack} maxLength={40} onChange={(e) => setAdding({ ...adding, pack: e.target.value })} />
+                      <TextField label={t.newItemPer} inputMode="numeric" value={adding.per} onChange={(e) => setAdding({ ...adding, per: e.target.value.replace(/\D/g, '') })} />
+                    </div>
+                    <p className="text-micro text-muted">{t.newItemHint}</p>
+                    <span className="flex gap-2">
+                      <Button type="button" variant="brutal-blue" disabled={adding.busy} onClick={() => void addItem()}>{t.newItemSave}</Button>
+                      <Button type="button" onClick={() => setAdding(null)}>{en.reauth.cancel}</Button>
+                    </span>
+                  </div>
+                )}
                 <div className="grid gap-3 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_90px_90px]">
                   <div>
                     <span className="block text-small font-medium text-ink-soft">{t.item}</span>
                     <div className="mt-1"><Combobox items={itemOpts} value={l.itemId} onChange={(v) => void pickItem(l.key, v)} placeholder={t.pickItem} emptyText={t.noItem} /></div>
+                    {adding?.key !== l.key && (
+                      <button type="button" className="mt-1 text-small font-semibold text-brand"
+                        onClick={() => setAdding({ key: l.key, name: '', category: 'MEDICINE', baseUnit: 'TABLET', pack: 'strip', per: '10', busy: false })}>{t.newItem}</button>
+                    )}
                   </div>
                   <SelectField label={t.pack} value={l.purchaseUnitId ?? ''} onChange={(e) => set(l.key, { purchaseUnitId: e.target.value })}>
                     {us.filter((u) => u.active).map((u) => <option key={u.id} value={u.id}>{u.isBase ? u.name : `${u.name} of ${u.baseUnitsPerUnit}`}</option>)}
