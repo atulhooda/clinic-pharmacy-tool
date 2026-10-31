@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
@@ -15,23 +15,15 @@ import { fmtPaise } from '@/lib/money';
 import { api, newIdempotencyKey } from '@/components/settings/client';
 import { dmy, istDateTime, parseRupees, unitWord } from './format';
 import { itemOption, rupeesText, useItems, useSuppliers, type Unit } from './catalogue';
+import { makerOnPick, needsManufacturer, type Problem } from '@/lib/stock/receipt-rules';
+import { onFile, screenChecks, type ApiLine, type Form, type Grn, type Maker } from './grn-checks';
 
 const t = en.receive;
-type Problem = { code: string; lineNo?: number };
-type ApiLine = { itemId: string; purchaseUnitId: string; qty: number; freeQty: number; batchNo: string | null; expiry: string | null; mrpPaise: number | null;
-  mrpUnitId: string | null; purchaseRatePaise: number; discountPaise: number; gstRateBp: number | null; manufacturerName: string | null; manufacturerAddress: string | null;
-  lineNo: number; itemName: string; baseUnit: string; purchaseUnitName: string; receivedBase: number; valuePaise: number; gstPaise: number };
-type Grn = { id: string; status: 'DRAFT' | 'POSTED' | 'REVERSED' | 'DISCARDED'; supplierId: string; supplierName: string; supplierLicenceStatus: string;
-  invoiceNo: string; invoiceDate: string; invoiceTotalPaise: number | null; notes: string | null; postedAt: string | null; lines: ApiLine[];
-  valuePaise: number; gstPaise: number; totalPaise: number; checks: { errors: Problem[]; warnings: Problem[] } | null };
-type Form = { key: string; itemId: string | null; purchaseUnitId: string | null; qty: string; freeQty: string; batchNo: string; expiry: string; mrp: string;
-  mrpUnitId: string | null; rate: string; discount: string; gst: string; mfrName: string; mfrAddress: string };
-
 const GST = ['', '0', '5', '12', '18', '28'];
 const newKey = () => Math.random().toString(36).slice(2);
-const blankLine = (): Form => ({ key: newKey(), itemId: null, purchaseUnitId: null, qty: '', freeQty: '', batchNo: '', expiry: '', mrp: '', mrpUnitId: null,
+const blankLine = (): Form => ({ key: newKey(), saved: null, mfgDate: '', itemId: null, purchaseUnitId: null, qty: '', freeQty: '', batchNo: '', expiry: '', mrp: '', mrpUnitId: null,
   rate: '', discount: '', gst: '', mfrName: '', mfrAddress: '' });
-const fromApi = (l: ApiLine): Form => ({ key: newKey(), itemId: l.itemId, purchaseUnitId: l.purchaseUnitId, qty: String(l.qty), freeQty: l.freeQty ? String(l.freeQty) : '',
+const fromApi = (l: ApiLine): Form => ({ key: newKey(), saved: l.lineNo, mfgDate: l.mfgDate ?? '', itemId: l.itemId, purchaseUnitId: l.purchaseUnitId, qty: String(l.qty), freeQty: l.freeQty ? String(l.freeQty) : '',
   batchNo: l.batchNo ?? '', expiry: l.expiry ?? '', mrp: rupeesText(l.mrpPaise), mrpUnitId: l.mrpUnitId, rate: l.purchaseRatePaise ? rupeesText(l.purchaseRatePaise) : '',
   discount: l.discountPaise ? rupeesText(l.discountPaise) : '', gst: l.gstRateBp === null ? '' : String(l.gstRateBp / 100), mfrName: l.manufacturerName ?? '', mfrAddress: l.manufacturerAddress ?? '' });
 const problemText = (p: Problem) => `${p.lineNo ? `${t.line} ${p.lineNo}: ` : ''}${(t.problems as Record<string, string>)[p.code] ?? p.code}`;
@@ -40,7 +32,7 @@ const problemText = (p: Problem) => `${p.lineNo ? `${t.line} ${p.lineNo}: ` : ''
 export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
   const { items, reload: reloadItems } = useItems();
   // "+ New medicine" on a line: add one that is not in the list yet, then pick it (founder, 2026-10-30).
-  const [adding, setAdding] = useState<{ key: string; name: string; category: string; baseUnit: string; pack: string; per: string; busy: boolean } | null>(null);
+  const [adding, setAdding] = useState<{ key: string; name: string; category: string; baseUnit: string; pack: string; per: string; mfrName: string; mfrAddress: string; busy: boolean } | null>(null);
   const suppliers = useSuppliers();
   const [grn, setGrn] = useState<Grn | null>(null);
   const [head, setHead] = useState({ supplierId: '', invoiceNo: '', invoiceDate: '', total: '', notes: '' });
@@ -75,12 +67,26 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
     sub: `${s.gstin ?? 'No GSTIN'} · licence ${s.licenceStatus.toLowerCase().replace('_', ' ')}` })), [suppliers]);
 
   const set = (key: string, patch: Partial<Form>) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
-  async function pickItem(key: string, itemId: string | null) {
-    if (!itemId) return set(key, { itemId: null, purchaseUnitId: null, mrpUnitId: null });
+  /** Pick a line's item; its manufacturer fields start from the item's (or master's) values on file, still editable (R12-3). */
+  async function pickItem(key: string, itemId: string | null, made?: Maker) {
+    const prev = (k: string) => { const l = lines.find((x) => x.key === k); return l?.itemId ? onFile(itemById.get(l.itemId)) : null; };
+    const was = prev(key);
+    if (!itemId) return setLines((ls) => ls.map((l) => (l.key === key ? { ...l, itemId: null, purchaseUnitId: null, mrpUnitId: null, ...makerOnPick(l, was, null) } : l)));
     const us = await loadUnits(itemId);
     const buy = us.filter((u) => u.purchasable && u.active).sort((a, b) => b.baseUnitsPerUnit - a.baseUnitsPerUnit)[0] ?? us[0];
-    set(key, { itemId, purchaseUnitId: buy?.id ?? null, mrpUnitId: buy?.id ?? null });
+    const next = made ?? onFile(itemById.get(itemId));
+    setLines((ls) => ls.map((l) => (l.key === key ? { ...l, itemId, purchaseUnitId: buy?.id ?? null, mrpUnitId: buy?.id ?? null, ...makerOnPick(l, was, next) } : l)));
   }
+
+  // A saved line whose manufacturer fields are blank shows the item's values on file once the items are loaded (R12-3).
+  const prefilled = useRef(new Set<string>());
+  useEffect(() => {
+    if (items.length === 0) return;
+    const todo = lines.filter((l) => l.itemId && !prefilled.current.has(l.key) && itemById.has(l.itemId));
+    if (todo.length === 0) return;
+    for (const l of todo) prefilled.current.add(l.key);
+    setLines((ls) => ls.map((l) => (todo.some((x) => x.key === l.key) ? { ...l, ...makerOnPick(l, null, onFile(itemById.get(l.itemId!))) } : l)));
+  }, [items, lines, itemById]);
 
   async function addItem() {
     if (!adding) return;
@@ -89,8 +95,11 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
     const per = adding.pack.trim() ? Number(adding.per) : 0;
     if (adding.pack.trim() && !(Number.isInteger(per) && per > 1)) return setError(t.newItemPer);
     setAdding({ ...adding, busy: true });
+    // A new medicine can start with its manufacturer (R12-3), so this and every later delivery of it need nothing typed.
+    const maker = needsManufacturer(adding.category) ? { mfrName: adding.mfrName.trim() || null, mfrAddress: adding.mfrAddress.trim() || null } : { mfrName: null, mfrAddress: null };
     const r = await api<{ id: string }>('/api/dispensary/items', { body: { displayName: adding.name.trim(), category: adding.category, baseUnit: adding.baseUnit,
-      useFor: adding.category === 'CONSUMABLE' ? 'IN_CLINIC' : 'PATIENTS' } });
+      useFor: adding.category === 'CONSUMABLE' ? 'IN_CLINIC' : 'PATIENTS',
+      ...(maker.mfrName ? { customManufacturerName: maker.mfrName } : {}), ...(maker.mfrAddress ? { customManufacturerAddress: maker.mfrAddress } : {}) } });
     if (!r.ok) { setAdding({ ...adding, busy: false }); return setError(r.body.error ?? en.settings.failed); }
     if (adding.pack.trim()) {
       const u = await api(`/api/dispensary/items/${r.body.id}/units`, { body: { name: adding.pack.trim().toLowerCase(), baseUnitsPerUnit: per } });
@@ -100,7 +109,7 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
     setUnits((x) => { const { [r.body.id]: _drop, ...rest } = x; void _drop; return rest; });
     const key = adding.key;
     setAdding(null);
-    await pickItem(key, r.body.id);
+    await pickItem(key, r.body.id, maker);
   }
 
   /** The form as the API's lines, or the first problem a person must fix. */
@@ -120,7 +129,7 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
       out.push({ itemId: l.itemId, purchaseUnitId: l.purchaseUnitId, qty: Number(l.qty), freeQty: l.freeQty ? Number(l.freeQty) : 0,
         batchNo: l.batchNo.trim() || null, expiry: l.expiry.trim() || null, mrpPaise: mrp, mrpUnitId: mrp ? (l.mrpUnitId ?? l.purchaseUnitId) : null,
         purchaseRatePaise: rate, discountPaise: disc, gstRateBp: l.gst === '' ? null : Number(l.gst) * 100,
-        manufacturerName: l.mfrName.trim() || null, manufacturerAddress: l.mfrAddress.trim() || null });
+        mfgDate: l.mfgDate.trim() || null, manufacturerName: l.mfrName.trim() || null, manufacturerAddress: l.mfrAddress.trim() || null });
     }
     return { lines: out };
   }
@@ -168,9 +177,10 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
 
   if (!grn) return <p className="text-small text-muted">…</p>;
   const editable = canEdit && grn.status === 'DRAFT';
-  const errors = grn.checks?.errors ?? [];
-  const warnings = grn.checks?.warnings ?? [];
-  const lineProblems = (n: number) => [...errors, ...warnings].filter((p) => p.lineNo === n);
+  // R12-1: the panel and each line's notes describe the form as it is on screen, not as it was at the last save.
+  const live = screenChecks(grn, head, lines, itemById, units);
+  const { errors, warnings } = live;
+  const lineProblems = (n: number) => [...errors.map((p) => ({ ...p, bad: true })), ...warnings.map((p) => ({ ...p, bad: false }))].filter((p) => p.lineNo === n);
 
   return (
     <div className="space-y-5">
@@ -205,7 +215,7 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
           {lines.map((l, i) => {
             const item = l.itemId ? itemById.get(l.itemId) : undefined;
             const us = (l.itemId && units[l.itemId]) || [];
-            const needsMaker = item && (item.category === 'MEDICINE' || item.category === 'INJECTABLE');
+            const needsMaker = item && needsManufacturer(item.category);
             return (
               <div key={l.key} className="card space-y-3 p-4">
                 <div className="flex items-center justify-between">
@@ -231,6 +241,12 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
                       <TextField label={t.newItemPack} placeholder="strip, box, bottle…" value={adding.pack} maxLength={40} onChange={(e) => setAdding({ ...adding, pack: e.target.value })} />
                       <TextField label={t.newItemPer} inputMode="numeric" value={adding.per} onChange={(e) => setAdding({ ...adding, per: e.target.value.replace(/\D/g, '') })} />
                     </div>
+                    {needsManufacturer(adding.category) && (
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <TextField label={t.newItemMaker} value={adding.mfrName} maxLength={200} onChange={(e) => setAdding({ ...adding, mfrName: e.target.value })} />
+                        <TextField label={t.newItemMakerAddress} value={adding.mfrAddress} maxLength={500} onChange={(e) => setAdding({ ...adding, mfrAddress: e.target.value })} />
+                      </div>
+                    )}
                     <p className="text-micro text-muted">{t.newItemHint}</p>
                     <span className="flex gap-2">
                       <Button type="button" variant="brutal-blue" disabled={adding.busy} onClick={() => void addItem()}>{t.newItemSave}</Button>
@@ -244,7 +260,7 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
                     <div className="mt-1"><Combobox items={itemOpts} value={l.itemId} onChange={(v) => void pickItem(l.key, v)} placeholder={t.pickItem} emptyText={t.noItem} /></div>
                     {adding?.key !== l.key && (
                       <button type="button" className="mt-1 text-small font-semibold text-brand"
-                        onClick={() => setAdding({ key: l.key, name: '', category: 'MEDICINE', baseUnit: 'TABLET', pack: 'strip', per: '10', busy: false })}>{t.newItem}</button>
+                        onClick={() => setAdding({ key: l.key, name: '', category: 'MEDICINE', baseUnit: 'TABLET', pack: 'strip', per: '10', mfrName: '', mfrAddress: '', busy: false })}>{t.newItem}</button>
                     )}
                   </div>
                   <SelectField label={t.pack} value={l.purchaseUnitId ?? ''} onChange={(e) => set(l.key, { purchaseUnitId: e.target.value })}>
@@ -273,7 +289,7 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
                   </div>
                 )}
                 {lineProblems(i + 1).map((p) => (
-                  <p key={p.code} className={`text-small ${errors.includes(p) ? 'text-bad' : 'text-warn-ink'}`}>{problemText({ code: p.code })}</p>
+                  <p key={p.code} className={`text-small ${p.bad ? 'text-bad' : 'text-warn-ink'}`}>{problemText({ code: p.code })}</p>
                 ))}
               </div>
             );
@@ -305,6 +321,7 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
           {errors.length > 0 ? (
             <Banner tone="bad"><b>{t.mustFix}:</b> {errors.map(problemText).join(' · ')}</Banner>
           ) : <Banner tone="info">{t.readyToPost}{warnings.length ? ` ${t.toCheck}: ${warnings.map(problemText).join(' · ')}` : ''}</Banner>}
+          {live.recheck && <p className="text-small text-muted">{t.recheck}</p>}
           <div className="flex flex-wrap gap-2">
             <Button variant="brutal" busy={busy} onClick={() => void save()}>{t.save}</Button>
             <Button variant="brutal-blue" busy={busy} onClick={() => setConfirm({ kind: 'post', key: newIdempotencyKey() })}>{t.post}</Button>

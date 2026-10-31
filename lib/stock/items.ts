@@ -49,6 +49,8 @@ export interface ItemView {
   requiresPrescription: boolean;
   requiresPrescriptionImposed: boolean;
   manufacturerName: string | null;
+  /** The item's own address, else its master's (R12-3: a delivery line starts with it). */
+  manufacturerAddress: string | null;
   hsnCode: string | null;
   storageCondition: string | null;
   reorderLevel: number | null;
@@ -63,6 +65,7 @@ const ITEM_SELECT = `
          i.requires_prescription AS "requiresPrescription",
          (coalesce(m.requires_prescription, false) OR 'X' = ANY (coalesce(m.schedule_flags, '{}') || i.extra_schedule_flags)) AS "requiresPrescriptionImposed",
          coalesce(i.custom_manufacturer_name, m.manufacturer_name) AS "manufacturerName",
+         coalesce(i.custom_manufacturer_address, m.manufacturer_address) AS "manufacturerAddress",
          coalesce(i.hsn_code_override, m.hsn_code) AS "hsnCode", i.storage_condition AS "storageCondition",
          i.reorder_level AS "reorderLevel", i.reorder_qty AS "reorderQty", i.rack_location AS "rackLocation", i.active
     FROM items i LEFT JOIN medicine_master m ON m.id = i.master_id

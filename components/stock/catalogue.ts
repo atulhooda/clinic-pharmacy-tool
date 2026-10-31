@@ -7,7 +7,8 @@ import { unitWord } from './format';
 
 /** The client's view of the catalogue, shared by the stock screens. */
 export type Unit = { id: string; name: string; baseUnitsPerUnit: number; isBase: boolean; dispensable: boolean; purchasable: boolean; active: boolean };
-export type ItemOpt = { id: string; displayName: string; category: string; baseUnit: string; active: boolean; stock?: { onHandBase: number } };
+export type ItemOpt = { id: string; displayName: string; category: string; baseUnit: string; active: boolean; stock?: { onHandBase: number };
+  trackBatches?: boolean; manufacturerName?: string | null; manufacturerAddress?: string | null };
 export type SupplierOpt = { id: string; name: string; licenceStatus: string; active: boolean; gstin: string | null };
 export type PremisesOpt = { id: string; name: string; settings: unknown | null };
 

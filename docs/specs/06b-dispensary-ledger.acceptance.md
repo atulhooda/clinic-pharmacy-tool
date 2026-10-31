@@ -711,6 +711,8 @@ The clock is **2026-10-08 10:00 IST** unless stated. Reason-free lag 120 min; st
 | DM-04 | MR-03 supplier licence at an RMP premises | a GRN at A_GJ from SUP_LIC posts | from SUP_NOLIC at A_GJ → 422 `SUPPLIER_LICENCE_MISSING`; nothing posted |
 | DM-05 | MR-03 an expired licence only warns | SUP_LIC `valid_till` 2026-01-01 → 200 + warning `SUPPLIER_LICENCE_EXPIRED` | — |
 | DM-06 | MR-04 manufacturer details | a master with an address → posts | a custom MEDICINE item with no address anywhere → 422 `MANUFACTURER_DETAILS_MISSING` |
+| DM-06a | MR-04 typed once (06 R12-2, 2026-10-31) | a post with the maker on the line fills an item that had none (name and address, from the first line that has them; audited `item.changed`, `reason: grn_posted`); the next delivery of it shows no problem and posts with nothing typed, its line snapshot carrying the stored values; a master-linked item with a name and no address gains only the address | an item with its own maker keeps it (a different maker on the line goes on the line only, no audit row); a retail product gains nothing; a refused post gains nothing |
+| DM-06b | MR-04 on screen (06 R12-1, R12-3) | the editor's check of the screen (pure): a line with both fields filled shows no `MANUFACTURER_DETAILS_MISSING` though the last save did; one blank or space-only field still shows it; the server-only problems (MRP, licences, duplicate, supplier) stay with an unchanged line, follow it when a line above is removed, and are dropped with a "save to re-check" when it changes; E-12 / E-14 carry `manufacturerAddress`; E-13 creates a medicine with its maker; a draft carries `checkContext`, a posted delivery does not | — |
 | DM-07 | MR-05 purchase register per premises | after DM-04's pass, the E-40 purchase register for A_GJ has the line with every Schedule K field; A_MH's does not | — |
 | DM-08 | MR-06 **per premises** | the same user, same organisation, same patient: a dispense at **A_GJ** → 201 | a dispense / preview / patient return at **A_MH** → 409 `MODE_FORBIDS_OPERATION` |
 | DM-09 | MR-07 CONSUMABLES_ONLY operations | at A_MH: a GRN from **SUP_NOLIC** posts; a GLV procedure use, write-off, adjustment and reversal → 2xx | — |
@@ -1010,7 +1012,7 @@ Driven in-process through the real route handlers with requests signed as the de
 | Moves to Milestone 2 | Rows |
 |---|---|
 | backdating | DT (all), DP-11, DC-08, DC-09, DM-21, DR-15 |
-| procedure use, `CONSUMABLES_ONLY`, containers | DM-06 … 09, DM-18, DM-22, DO-18 (re-run at A_GJ by dispensing), DV (all), DL-26, DP-09, DJ-10, DR-14 |
+| procedure use, `CONSUMABLES_ONLY`, containers | DM-06 … 09 (DM-06a and 06b stay in Milestone 1, 2026-10-31), DM-18, DM-22, DO-18 (re-run at A_GJ by dispensing), DV (all), DL-26, DP-09, DJ-10, DR-14 |
 | manual opening-balance adjustments, supplier returns (stock-count corrections are Milestone 1, D-42) | DE-14, DO-17, DM-13 (the supplier-return part), DE-20 (the supplier-return part) |
 | the patient merge tool | DRX-17 … 23, DC-12, DX-78 … 80 |
 | jobs, outbox, reconciliation, purges | DJ (all) |
