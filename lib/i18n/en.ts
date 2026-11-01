@@ -444,7 +444,8 @@ export const en = {
     // D-67: the bill's people, and where each line stands now.
     patient: 'Patient',
     doctor: 'Doctor',
-    noParty: 'The desk did not send the patient for this bill.',
+    noParty: 'The desk did not send a patient name or doctor for this bill.',
+    patientHidden: 'Patient details are not shown for your role.',
     returnedAll: 'Returned',
     partReturned: (n: number) => `Stock taken, ${n} returned`,
     creditNote: 'Credit note',

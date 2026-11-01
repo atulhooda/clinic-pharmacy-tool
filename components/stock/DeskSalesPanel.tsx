@@ -7,6 +7,7 @@ import DataList from '@/components/ui/DataList';
 import { api, newIdempotencyKey } from '@/components/settings/client';
 import { useGrant } from '@/components/settings/useGrant';
 import { en } from '@/lib/i18n/en';
+import { deskBillParty } from '@/lib/stock/display';
 
 const t = en.deskSales;
 type State = 'TAKEN' | 'PART_RETURNED' | 'RETURNED' | 'SHORT' | 'REJECTED' | 'CANCELLED';
@@ -16,7 +17,7 @@ type Row = {
   qtyBase: number; baseUnit: string | null; batches: string | null; returnedBase: number; status: 'POSTED' | 'SHORT' | 'REJECTED' | 'CANCELLED'; shortBase: number; reason: string | null;
   rxFlags: string[] | null; credits: Credit[]; state: State;
 };
-type Bill = { billId: string; billSerial: string; issuedAt: string; patientName: string | null; patientRef: string | null; doctorName: string | null; lines: Row[] };
+type Bill = { billId: string; billSerial: string; issuedAt: string; patientName: string | null; patientRef: string | null; patientHidden: boolean; doctorName: string | null; lines: Row[] };
 
 /** D-67: the page reads again on its own this often while it is on screen, and whenever it comes back into view. */
 const REFRESH_MS = 30_000;
@@ -101,20 +102,18 @@ export function DeskSalesPanel({ canResolve }: { canResolve: boolean }) {
       {error && <p role="alert" className="text-small text-bad">{error}</p>}
       {note && <p role="status" className="text-small text-muted">{note}</p>}
       {bills.length === 0 && <div className="card px-5 py-10 text-center text-small text-muted">{flagged ? t.emptyFlagged : t.emptyAll}</div>}
-      {bills.map((b) => (
+      {bills.map((b) => { const party = deskBillParty(b); return (
         <section key={b.billId} className="card overflow-hidden" aria-label={`${t.bill} ${b.billSerial}`}>
           <header className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-hairline px-4 py-3">
             <span>
               <span className="block tnum font-semibold text-ink">{b.billSerial}</span>
               <span className="block text-micro text-muted">{when(b.issuedAt)} · {t.lines(b.lines.length)}</span>
             </span>
-            {b.patientName || b.doctorName || b.patientRef
-              ? (
-                <span className="text-small text-ink">
-                  {b.patientName && <span className="block"><span className="text-muted">{t.patient}: </span>{b.patientName}</span>}
-                  {b.doctorName && <span className="block"><span className="text-muted">{t.doctor}: </span>{b.doctorName}</span>}
-                </span>)
-              : <span className="text-micro text-muted">{t.noParty}</span>}
+            <span className="text-small text-ink">
+              {party.patient && <span className="block"><span className="text-muted">{t.patient}: </span>{party.patient}</span>}
+              {party.doctor && <span className="block"><span className="text-muted">{t.doctor}: </span>{party.doctor}</span>}
+              {party.note && <span className="block text-micro text-muted">{party.note === 'hidden' ? t.patientHidden : t.noParty}</span>}
+            </span>
           </header>
           <DataList rows={b.lines} rowKey={(r) => r.id} empty={t.emptyAll} columns={[
             { key: 'item', header: t.item, primary: true, cell: (r) => (
@@ -141,7 +140,7 @@ export function DeskSalesPanel({ canResolve }: { canResolve: boolean }) {
               ? <Button size="sm" busy={busy === r.id} onClick={() => void retry(r)}>{t.retry}</Button> : null) },
           ]} />
         </section>
-      ))}
+      ); })}
       {dialog}
     </div>
   );

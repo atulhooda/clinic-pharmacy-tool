@@ -147,6 +147,8 @@ test('031 (D-67): a credit note stored before it keeps no number (NULL); a bill 
   assert.equal(head.code, 0, head.out);
   const serials = await inOrg(org.orgId, async (c) => (await c.query('SELECT credit_note_serial FROM desk_return_lines')).rows, u);
   assert.deepEqual(serials, [{ credit_note_serial: null }]);
+  const places = await inOrg(org.orgId, async (c) => (await c.query('SELECT line_no FROM desk_sale_lines')).rows, u);
+  assert.deepEqual(places, [{ line_no: null }], 'a line stored before 031 has no place on the bill');
   const add = (name: string) => inOrg(org.orgId, (c) => c.query(`INSERT INTO desk_sale_bills (org_id, premises_id, bill_id, patient_name, received_at)
       VALUES ($1, $2, $3, $4, now()) ON CONFLICT ON CONSTRAINT desk_sale_bills_key DO NOTHING`, [org.orgId, org.premisesId, billId, name]), u);
   await add('Test Patient');

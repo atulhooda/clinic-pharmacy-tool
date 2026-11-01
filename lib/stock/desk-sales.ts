@@ -184,9 +184,14 @@ export interface DeskSaleView {
   credits: DeskCredit[];
   /** D-67: what the line is now, from the stored status and what came back (deskLineState). */
   state: DeskLineState;
-  /** D-67: the bill's patient and doctor when the desk sent them (desk_sale_bills); null otherwise. */
+  /**
+   * D-67: the bill's patient and doctor when the desk sent them (desk_sale_bills); null otherwise. The patient
+   * (name and desk id) is shown only to a caller who may see patients (canSeePatients, 06a §4.3); for anyone else
+   * both are null and `patientHidden` says whether the desk had sent one. The doctor is a prescriber, not a patient: always shown.
+   */
   patientName: string | null;
   patientRef: string | null;
+  patientHidden: boolean;
   doctorName: string | null;
   /**
    * D-66: what the line was exposed to when it was received (RX_FLAGS); recorded, never enforced.
@@ -215,6 +220,7 @@ export interface DeskBillView {
   issuedAt: string;
   patientName: string | null;
   patientRef: string | null;
+  patientHidden: boolean;
   doctorName: string | null;
   lines: DeskSaleView[];
 }
@@ -238,11 +244,21 @@ const VIEW = `
     LEFT JOIN staff_users u ON u.org_id = d.org_id AND u.id = d.resolved_by
     LEFT JOIN desk_sale_bills sb ON sb.org_id = d.org_id AND sb.bill_id = d.bill_id
    WHERE d.org_id = $1`;
-type Row = Omit<DeskSaleView, 'issuedAt' | 'receivedAt' | 'resolvedAt' | 'state' | 'credits'> & { issuedAt: Date; receivedAt: Date; resolvedAt: Date | null;
+type Row = Omit<DeskSaleView, 'issuedAt' | 'receivedAt' | 'resolvedAt' | 'state' | 'credits' | 'patientHidden'> & { issuedAt: Date; receivedAt: Date; resolvedAt: Date | null;
   credits: (Omit<DeskCredit, 'receivedAt'> & { receivedAt: string })[] };
-const view = (r: Row): DeskSaleView => ({
+
+/**
+ * 06a §4.3 (D-1): a stock-only role sees no patient name anywhere. Desk sales is gated on `stock.view`, so the
+ * bill's patient is shown only to a caller who also holds `patients.view`, `rx.view` or `dispense.view` (E-31's rule).
+ */
+export function canSeePatients(s: Pick<Session, 'permissions'>): boolean {
+  return s.permissions.has('patients.view') || s.permissions.has('rx.view') || s.permissions.has('dispense.view');
+}
+const view = (r: Row, patients: boolean): DeskSaleView => ({
   ...r, issuedAt: r.issuedAt.toISOString(), receivedAt: r.receivedAt.toISOString(), resolvedAt: r.resolvedAt?.toISOString() ?? null,
   credits: r.credits.map((c) => ({ ...c, receivedAt: new Date(c.receivedAt).toISOString() })), state: deskLineState(r),
+  patientName: patients ? r.patientName : null, patientRef: patients ? r.patientRef : null,
+  patientHidden: !patients && (r.patientName !== null || r.patientRef !== null),
 });
 
 /** The lines grouped by bill, in the order given (newest bill first); the bill's fields are any line's (they are the same on each). */
@@ -251,7 +267,8 @@ export function billsOf(lines: readonly DeskSaleView[]): DeskBillView[] {
   for (const l of lines) {
     let b = out.get(l.billId);
     if (!b) {
-      b = { billId: l.billId, billSerial: l.billSerial, issuedAt: l.issuedAt, patientName: l.patientName, patientRef: l.patientRef, doctorName: l.doctorName, lines: [] };
+      b = { billId: l.billId, billSerial: l.billSerial, issuedAt: l.issuedAt, patientName: l.patientName, patientRef: l.patientRef, patientHidden: l.patientHidden,
+        doctorName: l.doctorName, lines: [] };
       out.set(l.billId, b);
     }
     b.lines.push(l);
@@ -273,7 +290,8 @@ export const DESK_SALES_BILLS = 200;
 /**
  * E-55: the desk's sale lines at the caller's premises: open ones (short or rejected) by default, `?status=all` for
  * every line, `flagged` for lines with rx_flags. The newest DESK_SALES_BILLS bills that have a matching line, with
- * every matching line of each (D-67), as `items` (lines) and `bills` (the same lines grouped by bill). Read fresh
+ * every matching line of each (D-67) in the order printed on the bill (line_no; lines stored before 031: received, then
+ * line key), as `items` (lines) and `bills` (the same lines grouped by bill). Read fresh
  * on each call: a Retry or a credit note shows on the next read.
  */
 export async function listDeskSales(s: Session, q: URLSearchParams): Promise<{ items: DeskSaleView[]; bills: DeskBillView[]; open: number }> {
@@ -285,10 +303,11 @@ export async function listDeskSales(s: Session, q: URLSearchParams): Promise<{ i
       `${VIEW} AND d.premises_id = ANY($2::uuid[]) ${STATUS_FILTER[status]}
           AND d.bill_id IN (SELECT d.bill_id FROM desk_sale_lines d WHERE d.org_id = $1 AND d.premises_id = ANY($2::uuid[]) ${STATUS_FILTER[status]}
                              GROUP BY d.bill_id ORDER BY max(d.issued_at) DESC, d.bill_id LIMIT $3)
-        ORDER BY d.issued_at DESC, d.bill_id, d.received_at, d.line_key`, [s.orgId, premises, DESK_SALES_BILLS]);
+        ORDER BY d.issued_at DESC, d.bill_id, d.line_no NULLS LAST, d.received_at, d.line_key`, [s.orgId, premises, DESK_SALES_BILLS]);
     const open = (await db.rows<{ n: number }>(`SELECT count(*)::int AS n FROM desk_sale_lines WHERE org_id = $1 AND premises_id = ANY($2::uuid[]) AND status IN ('SHORT','REJECTED')`,
       [s.orgId, premises]))[0].n;
-    const items = rows.map(view);
+    const patients = canSeePatients(s);
+    const items = rows.map((r) => view(r, patients));
     return { items, bills: billsOf(items), open };
   });
 }
@@ -296,7 +315,7 @@ export async function listDeskSales(s: Session, q: URLSearchParams): Promise<{ i
 export async function getDeskSale(s: Session, id: string): Promise<DeskSaleView> {
   const r = await withTenant(s.orgId, async (db) => (await db.rows<Row>(`${VIEW} AND d.id = $2`, [s.orgId, id]))[0]);
   if (!r || !inScope(s, r.premisesId)) throw notFound();
-  return view(r);
+  return view(r, canSeePatients(s));
 }
 
 /**

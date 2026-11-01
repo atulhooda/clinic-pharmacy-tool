@@ -233,6 +233,8 @@ export async function postDeskSales(ctx: DeskContext, input: SalesInput): Promis
       await lockBalances(db, ctx.orgId, fresh.filter((l) => !deskIneligibility(items.get(l.itemId))).map((l) => ({ itemId: l.itemId, locationId: storeId })));
       const at = now();
       const asOf = istDate(at);
+      // D-67: each line keeps its place on the bill (its position in the body), for Desk sales' order.
+      const place = new Map(input.lines.map((l, i) => [l.lineKey, i + 1]));
       for (const l of fresh) {
         const item = items.get(l.itemId);
         const reject = deskIneligibility(item);
@@ -240,12 +242,12 @@ export async function postDeskSales(ctx: DeskContext, input: SalesInput): Promis
         const status: DeskLineStatus = reject ? 'REJECTED' : r!.ok ? 'POSTED' : 'SHORT';
         const ins = await db.rows<{ id: string }>(
           `INSERT INTO desk_sale_lines (org_id, premises_id, bill_id, line_key, bill_serial, issued_at, requested_item_id, item_id, qty_base,
-                                        status, allocated_base, short_base, reason, location_id, received_at, rx_flags)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::text[])
+                                        status, allocated_base, short_base, reason, location_id, received_at, rx_flags, line_no)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::text[], $17)
            ON CONFLICT ON CONSTRAINT desk_sale_lines_key DO NOTHING RETURNING id`,
           [ctx.orgId, ctx.premisesId, input.billId, l.lineKey, input.serial, input.issuedAt, l.itemId, item ? item.id : null, l.qtyBase,
             status, status === 'POSTED' ? l.qtyBase : 0, r && !r.ok ? r.shortBase : 0, reject ?? (r && !r.ok ? r.reason : null),
-            status === 'POSTED' ? storeId : null, at, rxFlagsOf(item)]);
+            status === 'POSTED' ? storeId : null, at, rxFlagsOf(item), place.get(l.lineKey)]);
         // Stored first by a concurrent call: nothing moves here; its result is read below.
         if (ins.length === 0) continue;
         if (r && r.ok) await postSaleAllocations(db, actor, at, { id: ins[0].id, premisesId: ctx.premisesId, itemId: l.itemId, storeId }, r.allocations);

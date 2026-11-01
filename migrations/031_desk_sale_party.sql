@@ -9,6 +9,9 @@
 --   patient_ref is the desk's own patient id (a uuid the pharmacy never resolves), not a pharmacy patient.
 -- - desk_return_lines.credit_note_serial: the credit note's number as the desk printed it, when the desk sends
 --   it (E-54 `serial`); NULL for every return stored before 031 and for a desk that does not send it.
+-- - desk_sale_lines.line_no: the line's place on the bill (its 1-based position in the E-53 body), so Desk sales
+--   lists a bill's items in the order printed on it; the desk's line keys do not sort in that order. NULL for
+--   every line stored before 031 (they keep the old order: received, then line key). Never changes (the guard).
 
 -- ---------------------------------------------------------------- sale bills
 CREATE TABLE desk_sale_bills (
@@ -46,3 +49,24 @@ GRANT SELECT ON desk_sale_bills TO pharmacy_jobs;
 ALTER TABLE desk_return_lines ADD COLUMN credit_note_serial text NULL;
 ALTER TABLE desk_return_lines ADD CONSTRAINT desk_return_lines_serial_len CHECK (
   credit_note_serial IS NULL OR (length(btrim(credit_note_serial)) BETWEEN 1 AND 40 AND credit_note_serial !~ '[[:cntrl:]]'));
+
+-- ---------------------------------------------------------------- the line's place on the bill
+-- Added without a default: every line already stored stays NULL. The app role has no UPDATE on it (028's column
+-- grant), and 030's guard now also freezes it, for the owner too.
+ALTER TABLE desk_sale_lines ADD COLUMN line_no integer NULL;
+ALTER TABLE desk_sale_lines ADD CONSTRAINT desk_sale_lines_line_no CHECK (line_no IS NULL OR line_no BETWEEN 1 AND 1000);
+
+CREATE OR REPLACE FUNCTION desk_sale_lines_guard() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status = 'POSTED' AND EXISTS (SELECT 1 FROM desk_return_lines r WHERE r.org_id = NEW.org_id AND r.sale_line_id = NEW.id) THEN
+    RAISE EXCEPTION 'a credited desk sale line never takes stock' USING ERRCODE = 'P0001', HINT = 'DESK_SALE_CREDITED';
+  END IF;
+  IF OLD.status IN ('POSTED','CANCELLED')
+     OR (NEW.org_id, NEW.premises_id, NEW.bill_id, NEW.line_key, NEW.bill_serial, NEW.issued_at, NEW.requested_item_id, NEW.item_id, NEW.qty_base, NEW.received_at, NEW.line_no)
+        IS DISTINCT FROM (OLD.org_id, OLD.premises_id, OLD.bill_id, OLD.line_key, OLD.bill_serial, OLD.issued_at, OLD.requested_item_id, OLD.item_id, OLD.qty_base, OLD.received_at, OLD.line_no)
+     OR (OLD.rx_flags IS NOT NULL AND NEW.rx_flags IS DISTINCT FROM OLD.rx_flags) THEN
+    RAISE EXCEPTION 'a desk sale line changes only by being resolved' USING ERRCODE = 'P0001', HINT = 'DESK_SALE_FIXED';
+  END IF;
+  RETURN NEW;
+END $$;
