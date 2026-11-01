@@ -404,7 +404,7 @@ test('R11-5 / D-66: the feed\'s dispensableBase is exactly what a sale can take,
   assert.deepEqual([after.get(w.glv.id), after.get(gel.id)], [0, 0]);
 });
 
-test('D-66 / migration 030: rx_flags never changes after insert (the guard, during a resolve too), holds only known flags, and the app role cannot update it', async () => {
+test('D-66 / migration 030: rx_flags never changes once recorded (the guard, during a resolve too, for the owner and the app role), and holds only known flags', async () => {
   const w = await stockWorld('dsrxguard');
   const inj = await createItem(w.owner, { category: 'INJECTABLE', displayName: `Inj ${randomUUID().slice(0, 4)}`, baseUnit: 'VIAL' });
   on(w);
@@ -422,7 +422,15 @@ test('D-66 / migration 030: rx_flags never changes after insert (the guard, duri
     [w.org.orgId, w.main.id, billId, inj.id, flags]);
   assert.equal((await insert('{bogus}'))?.constraint, 'desk_sale_lines_rx_flags', 'only the known flags');
   assert.equal(await insert('{ndps,consumable}'), null);
-  assert.equal((await asAppIn(w.org.orgId, `UPDATE desk_sale_lines SET rx_flags = '{}' ${where}`, [w.org.orgId, billId]))?.code, '42501', 'no column grant');
+  assert.equal((await asAppIn(w.org.orgId, `UPDATE desk_sale_lines SET rx_flags = '{}' ${where}`, [w.org.orgId, billId]))?.hint, 'DESK_SALE_FIXED', 'the app role neither');
+  // A line stored before 030 (NULL: never recorded) may record its flags once; then they are fixed like any other.
+  assert.equal(await asAppIn(w.org.orgId, `INSERT INTO desk_sale_lines (org_id, premises_id, bill_id, line_key, bill_serial, issued_at, requested_item_id,
+      item_id, qty_base, status, allocated_base, short_base, reason, received_at, rx_flags) VALUES ($1, $2, $3, 'L3', 'S', now(), $4, $4, 1, 'SHORT', 0, 1, 'insufficient_stock', now(), NULL)`,
+  [w.org.orgId, w.main.id, billId, inj.id]), null);
+  const old = `WHERE org_id = $1 AND bill_id = $2 AND line_key = 'L3'`;
+  assert.equal(await asAppIn(w.org.orgId, `UPDATE desk_sale_lines SET rx_flags = '{injectable}' ${old}`, [w.org.orgId, billId]), null, 'NULL to a value, once');
+  assert.equal((await asAppIn(w.org.orgId, `UPDATE desk_sale_lines SET rx_flags = '{}' ${old}`, [w.org.orgId, billId]))?.hint, 'DESK_SALE_FIXED');
+  assert.equal((await asOwnerIn(w.org.orgId, `UPDATE desk_sale_lines SET rx_flags = NULL ${old}`, [w.org.orgId, billId]))?.hint, 'DESK_SALE_FIXED', 'nor back to NULL');
   // A real resolve keeps them.
   await stock(w, inj, 5, day(200));
   const line = (await w.owner.call(deskSalesList, { path: '/api/dispensary/desk-sales' })).body.items.find((i: { billId: string; lineKey: string }) => i.billId === billId && i.lineKey === 'L1');
@@ -430,22 +438,42 @@ test('D-66 / migration 030: rx_flags never changes after insert (the guard, duri
   assert.deepEqual([done.status, done.body.status, done.body.rxFlags], [200, 'POSTED', ['injectable', 'in_clinic_item']], JSON.stringify(done.body));
 });
 
-test('E-56 / D-66: Retry posts a line stored as rejected under the older rule (not_retail_product), and keeps its stored flags', async () => {
+test('E-56 / D-66: Retry posts a line stored as rejected under the older rule (not_retail_product), recording its flags once if it had none (stored before 030)', async () => {
   const w = await stockWorld('dsoldrule');
+  const inj = await createItem(w.owner, { category: 'INJECTABLE', displayName: `Inj H ${randomUUID().slice(0, 4)}`, baseUnit: 'VIAL', extraScheduleFlags: ['H'], requiresPrescription: true });
+  await stock(w, inj, 5, day(200));
   await post(w, [{ type: 'OPENING_BALANCE', itemId: w.glv.id, batchId: null, qtyDelta: 10 }]);
   on(w);
   const billId = randomUUID();
-  assert.equal(await asAppIn(w.org.orgId, `INSERT INTO desk_sale_lines (org_id, premises_id, bill_id, line_key, bill_serial, issued_at, requested_item_id, item_id, qty_base,
-      status, allocated_base, short_base, reason, received_at) VALUES ($1, $2, $3, 'L1', 'OLD-1', now(), $4, $4, 4, 'REJECTED', 0, 0, 'not_retail_product', now())`,
-  [w.org.orgId, w.main.id, billId, w.glv.id]), null);
-  const line = (await w.owner.call(deskSalesList, { path: '/api/dispensary/desk-sales' })).body.items.find((i: { billId: string }) => i.billId === billId);
-  assert.deepEqual([line.status, line.reason, line.rxFlags], ['REJECTED', 'not_retail_product', []]);
-  const done = await w.owner.call(deskResolve, { params: { id: line.id }, body: {}, headers: { 'reauth-grant': await grant(w.owner, w.aa, 'stock.adjust', w.main.id) } });
-  assert.equal(done.status, 200, JSON.stringify(done.body));
-  assert.deepEqual([done.body.status, done.body.allocatedBase, done.body.reason, done.body.rxFlags], ['POSTED', 4, null, []], 'posted; the flags are not recomputed');
-  assert.deepEqual((await movements(w, w.glv.id)).map((m) => [m.qty, m.actor]), [[-4, w.aa.name]]);
-  const again = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'L1', itemId: w.glv.id, qtyBase: 4 }], billId));
-  assert.deepEqual(again.body.lines[0], { lineKey: 'L1', status: 'posted', allocatedBase: 4, shortBase: 0, reason: null }, 'the desk\'s Send again sees it posted');
+  // L1 and L2 as 029 stored them (no rx_flags: NULL); L3 stored after 030 with its flags already recorded.
+  const old = (key: string, itemId: string, flags: string | null) => asAppIn(w.org.orgId, `INSERT INTO desk_sale_lines (org_id, premises_id, bill_id, line_key, bill_serial,
+      issued_at, requested_item_id, item_id, qty_base, status, allocated_base, short_base, reason, received_at, rx_flags)
+      VALUES ($1, $2, $3, $4, 'OLD-1', now(), $5, $5, 1, 'REJECTED', 0, 0, 'not_retail_product', now(), $6)`, [w.org.orgId, w.main.id, billId, key, itemId, flags]);
+  assert.equal(await old('L1', inj.id, null), null);
+  assert.equal(await old('L2', w.glv.id, null), null);
+  assert.equal(await old('L3', w.glv.id, '{consumable}'), null);
+  const list = async (status: string) => ((await w.owner.call(deskSalesList, { path: `/api/dispensary/desk-sales?status=${status}` })).body.items as
+    { id: string; billId: string; lineKey: string; status: string; reason: string | null; rxFlags: string[] | null }[]).filter((i) => i.billId === billId);
+  const before = new Map((await list('all')).map((l) => [l.lineKey, l]));
+  assert.deepEqual([...before.values()].map((l) => [l.lineKey, l.status, l.reason, l.rxFlags]).sort(),
+    [['L1', 'REJECTED', 'not_retail_product', null], ['L2', 'REJECTED', 'not_retail_product', null], ['L3', 'REJECTED', 'not_retail_product', ['consumable']]]);
+  assert.deepEqual((await list('flagged')).map((l) => l.lineKey), ['L3'], 'never recorded: not flagged yet');
+  const retry = async (key: string) => w.owner.call(deskResolve, { params: { id: before.get(key)!.id }, body: {},
+    headers: { 'reauth-grant': await grant(w.owner, w.aa, 'stock.adjust', w.main.id) } });
+  const injDone = await retry('L1');
+  assert.equal(injDone.status, 200, JSON.stringify(injDone.body));
+  assert.deepEqual([injDone.body.status, injDone.body.allocatedBase, injDone.body.reason, injDone.body.rxFlags],
+    ['POSTED', 1, null, ['requires_prescription', 'schedule_h', 'injectable', 'in_clinic_item']], 'posted, and the exposure is recorded now');
+  assert.deepEqual((await movements(w, inj.id)).filter((m) => m.qty < 0).map((m) => [m.qty, m.actor]), [[-1, w.aa.name]]);
+  // L2 records what its item is at its own Retry: gloves now used for patients.
+  await w.owner.call((await import('../app/api/dispensary/items/[id]/route')).PATCH, { method: 'PATCH', params: { id: w.glv.id }, body: { useFor: 'PATIENTS' } });
+  const glvDone = await retry('L2');
+  assert.deepEqual([glvDone.body.status, glvDone.body.rxFlags], ['POSTED', ['consumable']], JSON.stringify(glvDone.body));
+  const kept = await retry('L3');
+  assert.deepEqual([kept.body.status, kept.body.rxFlags], ['POSTED', ['consumable']], 'a recorded line is never recomputed');
+  assert.deepEqual((await list('flagged')).map((l) => l.lineKey).sort(), ['L1', 'L2', 'L3'], 'the old backlog that took stock shows under Flagged');
+  const again = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'L1', itemId: inj.id, qtyBase: 1 }], billId));
+  assert.deepEqual(again.body.lines[0], { lineKey: 'L1', status: 'posted', allocatedBase: 1, shortBase: 0, reason: null }, 'the desk\'s Send again sees it posted');
 });
 
 test('E-53: two posts of the same line at once give one set of movements and the same answer', async () => {

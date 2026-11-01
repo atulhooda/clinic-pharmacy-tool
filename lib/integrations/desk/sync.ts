@@ -195,7 +195,8 @@ async function storedSales(db: Db, ctx: DeskContext, billId: string, keys: strin
  * posted. The line row is inserted before any movement, ON CONFLICT DO NOTHING on (bill, line):
  * a line already stored (by an earlier call, or a concurrent one that committed first) moves
  * nothing and answers with what was stored. Every inserted line records its item's `rx_flags`
- * (D-66: exposure, never a gate), short and rejected lines too; nothing recomputes them later.
+ * (D-66: exposure, never a gate), short and rejected lines too; nothing recomputes them later
+ * (only a line stored before migration 030, which has none, records them on its first Retry, E-56).
  */
 export async function postDeskSales(ctx: DeskContext, input: SalesInput): Promise<{ lines: SaleLineResult[] }> {
   return withDeskTx(ctx.orgId, async (db) => {

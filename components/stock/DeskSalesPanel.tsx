@@ -12,7 +12,7 @@ const t = en.deskSales;
 type Row = {
   id: string; premisesId: string; billSerial: string; lineKey: string; issuedAt: string; receivedAt: string; itemId: string | null; itemName: string | null;
   qtyBase: number; baseUnit: string | null; batches: string | null; returnedBase: number; status: 'POSTED' | 'SHORT' | 'REJECTED' | 'CANCELLED'; shortBase: number; reason: string | null;
-  rxFlags: string[];
+  rxFlags: string[] | null;
 };
 
 const reasonText = (r: string | null) => (r ? (t.reasons as Record<string, string>)[r] ?? r : '');
@@ -74,7 +74,7 @@ export function DeskSalesPanel({ canResolve }: { canResolve: boolean }) {
             <span>
               <span className="block font-semibold text-ink">{r.itemName ?? t.unknownItem}</span>
               {r.reason && <span className="block text-micro text-muted">{reasonText(r.reason)}</span>}
-              {r.rxFlags.length > 0 && (
+              {r.rxFlags && r.rxFlags.length > 0 && (
                 <span className="mt-1 flex flex-wrap gap-1">
                   {r.rxFlags.map((f) => <Badge key={f} tone="warn" icon="⚑">{flagText(f)}</Badge>)}
                 </span>)}

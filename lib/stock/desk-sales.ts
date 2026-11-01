@@ -180,8 +180,11 @@ export interface DeskSaleView {
   /** The batches the line took its stock from ("B043 ×2"), and how much was credited back. */
   batches: string | null;
   returnedBase: number;
-  /** D-66: what the line was exposed to when it was received (RX_FLAGS); recorded, never enforced. */
-  rxFlags: string[];
+  /**
+   * D-66: what the line was exposed to when it was received (RX_FLAGS); recorded, never enforced.
+   * Null: stored before migration 030 and never retried since, so never recorded.
+   */
+  rxFlags: string[] | null;
 }
 
 const VIEW = `
@@ -233,6 +236,9 @@ export async function getDeskSale(s: Session, id: string): Promise<DeskSaleView>
  * E-56: try a short or rejected line again, after stock was counted or received (or the item
  * corrected). A line a credit note has reached is refused (409 DESK_SALE_CREDITED). Signed with the `stock.adjust` grant for the line's premises (D-33). The movements
  * name the person who resolved it. Still short: the line stays SHORT with the new shortfall.
+ * A line stored before migration 030 has no `rx_flags` (NULL): the first Retry records its item's
+ * flags, whatever the outcome, so the old backlog that now takes stock is flagged (D-66). A line
+ * that has them keeps them: they are never recomputed.
  */
 export async function resolveDeskSale(s: Session, id: string, grantId: string | undefined): Promise<DeskSaleView> {
   await withStockTx(s, async (db) => {
@@ -252,8 +258,10 @@ export async function resolveDeskSale(s: Session, id: string, grantId: string | 
       staffUserId: s.staffUserId, sessionId: s.sid, deviceId: s.deviceId, entityId: id, detail: { kind } });
     const item = line.itemId ? (await deskItemsById(db, s.orgId, [line.itemId])).get(line.itemId) : undefined;
     const reject = deskIneligibility(item);
+    const flags = rxFlagsOf(item);
     if (reject) {
-      await db.rows(`UPDATE desk_sale_lines SET status = 'REJECTED', short_base = 0, reason = $3 WHERE org_id = $1 AND id = $2`, [s.orgId, id, reject]);
+      await db.rows(`UPDATE desk_sale_lines SET status = 'REJECTED', short_base = 0, reason = $3, rx_flags = coalesce(rx_flags, $4::text[])
+                      WHERE org_id = $1 AND id = $2`, [s.orgId, id, reject, flags]);
       await audit('rejected');
       return;
     }
@@ -262,13 +270,15 @@ export async function resolveDeskSale(s: Session, id: string, grantId: string | 
     await lockBalances(db, s.orgId, [{ itemId: line.itemId!, locationId: storeId }]);
     const r = await allocateAtStore(db, s.orgId, line.itemId!, storeId, line.qtyBase, todayIst());
     if (!r.ok) {
-      await db.rows(`UPDATE desk_sale_lines SET status = 'SHORT', short_base = $3, reason = $4 WHERE org_id = $1 AND id = $2`, [s.orgId, id, r.shortBase, r.reason]);
+      await db.rows(`UPDATE desk_sale_lines SET status = 'SHORT', short_base = $3, reason = $4, rx_flags = coalesce(rx_flags, $5::text[])
+                      WHERE org_id = $1 AND id = $2`, [s.orgId, id, r.shortBase, r.reason, flags]);
       await audit('short');
       return;
     }
     await postSaleAllocations(db, actor, at, { id, premisesId: line.premisesId, itemId: line.itemId!, storeId }, r.allocations);
     await db.rows(`UPDATE desk_sale_lines SET status = 'POSTED', allocated_base = qty_base, short_base = 0, reason = NULL, location_id = $3,
-                          resolved_at = $4, resolved_by = $5 WHERE org_id = $1 AND id = $2`, [s.orgId, id, storeId, at, s.staffUserId]);
+                          resolved_at = $4, resolved_by = $5, rx_flags = coalesce(rx_flags, $6::text[]) WHERE org_id = $1 AND id = $2`,
+    [s.orgId, id, storeId, at, s.staffUserId, flags]);
     await audit('posted');
   });
   return getDeskSale(s, id);

@@ -6,7 +6,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { as, freshDatabase, type Urls } from './harness/env';
-import { createOrg } from './harness/fixtures';
+import { createOrg, inOrg } from './harness/fixtures';
 
 const ROOT = process.cwd();
 const REPO_MIGRATIONS = path.join(ROOT, 'migrations');
@@ -112,4 +112,20 @@ test('DMG-13: an edited applied file, or an applied version the build lacks, fai
   const r2 = runRunner({ MIGRATION_DATABASE_URL: u.migrator, MIGRATIONS_DIR: REPO_MIGRATIONS });
   assert.equal(r2.code, 1);
   assert.match(r2.out, /has migration 999 \(from_the_future\), which this build does not ship/);
+});
+
+test('030 (D-66): a desk sale line stored before it has no rx_flags (NULL: never recorded); a line stored after defaults to none', async () => {
+  const u = await freshDatabase({ migrate: false });
+  const at029 = runRunner({ MIGRATION_DATABASE_URL: u.migrator, MIGRATIONS_DIR: migrationsDir(29) });
+  assert.equal(at029.code, 0, at029.out);
+  const org = await createOrg('m030', { from: u });
+  const line = (key: string) => inOrg(org.orgId, (c) => c.query(`INSERT INTO desk_sale_lines (org_id, premises_id, bill_id, line_key, bill_serial, issued_at,
+      requested_item_id, qty_base, status, allocated_base, short_base, reason, received_at)
+      VALUES ($1, $2, gen_random_uuid(), $3, 'OLD-1', now(), gen_random_uuid(), 1, 'REJECTED', 0, 0, 'unknown_item', now())`, [org.orgId, org.premisesId, key]), u);
+  await line('before');
+  const head = runRunner({ MIGRATION_DATABASE_URL: u.migrator, MIGRATIONS_DIR: REPO_MIGRATIONS });
+  assert.equal(head.code, 0, head.out);
+  await line('after');
+  const flags = await inOrg(org.orgId, async (c) => (await c.query('SELECT line_key, rx_flags FROM desk_sale_lines ORDER BY line_key')).rows, u);
+  assert.deepEqual(flags, [{ line_key: 'after', rx_flags: [] }, { line_key: 'before', rx_flags: null }]);
 });
