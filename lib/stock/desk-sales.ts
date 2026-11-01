@@ -9,11 +9,14 @@ import { consumeGrant } from '../auth/reauth';
 import { allocate, isInsufficient, type Allocation, type BatchStock } from './allocate';
 import { lockBalances, postMovements, withStockTx, type Actor } from './ledger';
 import { inScope } from './scope';
+import { SCHEDULES_SQL, USE_FOR_SQL } from './items';
 
 /**
  * The stock side of the desk's sales (06a §6.7, §9.3 desk_sale; D-57). The desk is the only
  * billing system; a bill it issues moves stock here, line by line:
- * - only items given to patients that are RETAIL_PRODUCT or MEDICINE (D-59; v1 was retail only), active;
+ * - any active item of the organisation, whatever its category or use (D-66; v1 was retail only, D-59
+ *   added medicines). Nothing about the patient, prescriber or prescription gates a sale: what the
+ *   item needs (a prescription, a schedule, an in-clinic use) is recorded on the line (`rx_flags`), never enforced;
  * - FEFO (allocate.ts) over the premises' default STORE only: never quarantine, never an expired
  *   batch, never a placeholder batch whose details are pending (D-55);
  * - all of a line or none of it: a line that cannot be fully allocated posts nothing and is kept
@@ -24,27 +27,55 @@ export type DeskLineStatus = 'POSTED' | 'SHORT' | 'REJECTED' | 'CANCELLED';
 export interface DeskItem {
   id: string;
   category: string;
-  useFor: string | null;
+  /** Resolved with the category's default (D-54), never null. */
+  useFor: string;
   active: boolean;
+  requiresPrescription: boolean;
+  /** Effective schedule flags (master ∪ extra), in SCHEDULE_FLAGS order. */
+  schedules: string[];
 }
 
-/** The categories the desk may sell (D-59): retail products and medicines; never injectables or consumables. */
-export const DESK_CATEGORIES: readonly string[] = ['RETAIL_PRODUCT', 'MEDICINE'];
-
-/** Why an item cannot be sold through the desk, or null if it can. The code keeps its v1 name (the contract's). */
+/**
+ * Why an item cannot be sold through the desk, or null if it can (D-66): only an item this
+ * organisation does not have, or one removed from the Stock list. Category and use never refuse
+ * a line any more; lines stored under the older rule keep their `not_retail_product` and
+ * `not_for_patients` reasons, and Retry (E-56) posts them.
+ */
 export function deskIneligibility(item: DeskItem | undefined): string | null {
   if (!item) return 'unknown_item';
-  if (!DESK_CATEGORIES.includes(item.category)) return 'not_retail_product';
-  // D-54: NULL is the category's default, which for a retail product or a medicine is "given to patients".
-  if (item.useFor === 'IN_CLINIC') return 'not_for_patients';
   if (!item.active) return 'item_inactive';
   return null;
+}
+
+/** The values `desk_sale_lines.rx_flags` may hold (migration 030's CHECK), in the order a line lists them. */
+export const RX_FLAGS = ['requires_prescription', 'schedule_h', 'schedule_h1', 'schedule_x', 'schedule_g', 'schedule_h2', 'ndps',
+  'injectable', 'consumable', 'in_clinic_item'] as const;
+const SCHEDULE_RX_FLAG: Record<string, (typeof RX_FLAGS)[number]> = {
+  H: 'schedule_h', H1: 'schedule_h1', X: 'schedule_x', G: 'schedule_g', H2: 'schedule_h2', NDPS: 'ndps',
+};
+
+/**
+ * What a desk sale of the item is exposed to (D-66): recorded on the line when it is received,
+ * never enforced, never recomputed. An unknown item has none.
+ */
+export function rxFlagsOf(item: DeskItem | undefined): string[] {
+  if (!item) return [];
+  const on = new Set<string>();
+  if (item.requiresPrescription) on.add('requires_prescription');
+  for (const f of item.schedules) if (SCHEDULE_RX_FLAG[f]) on.add(SCHEDULE_RX_FLAG[f]);
+  if (item.category === 'INJECTABLE') on.add('injectable');
+  if (item.category === 'CONSUMABLE') on.add('consumable');
+  if (item.useFor === 'IN_CLINIC') on.add('in_clinic_item');
+  return RX_FLAGS.filter((f) => on.has(f));
 }
 
 export async function deskItemsById(db: Db, orgId: string, ids: readonly string[]): Promise<Map<string, DeskItem>> {
   if (ids.length === 0) return new Map();
   const rows = await db.rows<DeskItem>(
-    `SELECT id, category, use_for AS "useFor", active FROM items WHERE org_id = $1 AND id = ANY($2::uuid[])`, [orgId, [...new Set(ids)]]);
+    `SELECT i.id, i.category, ${USE_FOR_SQL} AS "useFor", i.active, i.requires_prescription AS "requiresPrescription",
+            ${SCHEDULES_SQL} AS schedules
+       FROM items i LEFT JOIN medicine_master m ON m.id = i.master_id
+      WHERE i.org_id = $1 AND i.id = ANY($2::uuid[])`, [orgId, [...new Set(ids)]]);
   return new Map(rows.map((r) => [r.id, r]));
 }
 
@@ -149,6 +180,8 @@ export interface DeskSaleView {
   /** The batches the line took its stock from ("B043 ×2"), and how much was credited back. */
   batches: string | null;
   returnedBase: number;
+  /** D-66: what the line was exposed to when it was received (RX_FLAGS); recorded, never enforced. */
+  rxFlags: string[];
 }
 
 const VIEW = `
@@ -159,7 +192,8 @@ const VIEW = `
          (SELECT string_agg(coalesce(bt.batch_no, '—') || ' ×' || a.qty_base, ', ' ORDER BY a.alloc_no)
             FROM desk_sale_allocations a LEFT JOIN batches bt ON bt.org_id = a.org_id AND bt.id = a.batch_id
            WHERE a.org_id = d.org_id AND a.sale_line_id = d.id) AS batches,
-         coalesce((SELECT sum(r.qty_base)::int FROM desk_return_lines r WHERE r.org_id = d.org_id AND r.sale_line_id = d.id), 0) AS "returnedBase"
+         coalesce((SELECT sum(r.qty_base)::int FROM desk_return_lines r WHERE r.org_id = d.org_id AND r.sale_line_id = d.id), 0) AS "returnedBase",
+         d.rx_flags AS "rxFlags"
     FROM desk_sale_lines d
     LEFT JOIN items i ON i.org_id = d.org_id AND i.id = d.item_id
     LEFT JOIN staff_users u ON u.org_id = d.org_id AND u.id = d.resolved_by
@@ -168,13 +202,20 @@ type Row = Omit<DeskSaleView, 'issuedAt' | 'receivedAt' | 'resolvedAt'> & { issu
 const view = (r: Row): DeskSaleView => ({ ...r, issuedAt: r.issuedAt.toISOString(), receivedAt: r.receivedAt.toISOString(), resolvedAt: r.resolvedAt?.toISOString() ?? null });
 const notFound = () => new HttpError(404, 'DESK_SALE_NOT_FOUND', 'No such desk sale line.');
 
-/** E-55: the desk's sale lines at the caller's premises: open ones (short or rejected) by default, `?status=all` for every line. */
+const STATUS_FILTER: Record<string, string> = {
+  open: "AND d.status IN ('SHORT','REJECTED')",
+  all: '',
+  // D-66: every line sold with a prescription, schedule, injectable, consumable or in-clinic flag, whatever its status.
+  flagged: "AND d.rx_flags <> '{}'",
+};
+
+/** E-55: the desk's sale lines at the caller's premises: open ones (short or rejected) by default, `?status=all` for every line, `flagged` for lines with rx_flags. */
 export async function listDeskSales(s: Session, q: URLSearchParams): Promise<{ items: DeskSaleView[]; open: number }> {
   const status = q.get('status') ?? 'open';
-  if (status !== 'open' && status !== 'all') throw new HttpError(422, 'FIELD_INVALID', 'status is open or all.', { field: 'status', rule: 'enum' });
+  if (!Object.hasOwn(STATUS_FILTER, status)) throw new HttpError(422, 'FIELD_INVALID', 'status is open, all or flagged.', { field: 'status', rule: 'enum' });
   const premises = s.premises.map((p) => p.id);
   return withTenant(s.orgId, async (db) => {
-    const rows = await db.rows<Row>(`${VIEW} AND d.premises_id = ANY($2::uuid[]) ${status === 'open' ? "AND d.status IN ('SHORT','REJECTED')" : ''}
+    const rows = await db.rows<Row>(`${VIEW} AND d.premises_id = ANY($2::uuid[]) ${STATUS_FILTER[status]}
                                      ORDER BY d.issued_at DESC, d.received_at DESC, d.line_key LIMIT 500`, [s.orgId, premises]);
     const open = (await db.rows<{ n: number }>(`SELECT count(*)::int AS n FROM desk_sale_lines WHERE org_id = $1 AND premises_id = ANY($2::uuid[]) AND status IN ('SHORT','REJECTED')`,
       [s.orgId, premises]))[0].n;

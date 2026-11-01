@@ -12,9 +12,11 @@ const t = en.deskSales;
 type Row = {
   id: string; premisesId: string; billSerial: string; lineKey: string; issuedAt: string; receivedAt: string; itemId: string | null; itemName: string | null;
   qtyBase: number; baseUnit: string | null; batches: string | null; returnedBase: number; status: 'POSTED' | 'SHORT' | 'REJECTED' | 'CANCELLED'; shortBase: number; reason: string | null;
+  rxFlags: string[];
 };
 
 const reasonText = (r: string | null) => (r ? (t.reasons as Record<string, string>)[r] ?? r : '');
+const flagText = (f: string) => (t.flags as Record<string, string>)[f] ?? f;
 const when = (iso: string) => new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' });
 
 /** D-57, E-55/E-56: desk sale lines that took no stock (short or not sellable here), and Retry. */
@@ -23,12 +25,13 @@ export function DeskSalesPanel({ canResolve }: { canResolve: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [flagged, setFlagged] = useState(false);
   const { withGrant, dialog } = useGrant();
 
   const load = useCallback(async () => {
-    const r = await api<{ items: Row[] }>('/api/dispensary/desk-sales?status=all');
+    const r = await api<{ items: Row[] }>(`/api/dispensary/desk-sales?status=${flagged ? 'flagged' : 'all'}`);
     if (r.ok) { setRows(r.body.items); setError(null); } else setError(r.body.error ?? t.failed);
-  }, []);
+  }, [flagged]);
   useEffect(() => { void load(); }, [load]);
 
   const retry = async (row: Row) => {
@@ -53,7 +56,12 @@ export function DeskSalesPanel({ canResolve }: { canResolve: boolean }) {
 
   return (
     <div className="space-y-4">
-      {rows.length > 0 && (
+      <label className="flex items-center gap-2 text-small text-ink">
+        <input type="checkbox" checked={flagged} onChange={(e) => setFlagged(e.target.checked)} />
+        {t.showFlagged}
+      </label>
+      {flagged && <p className="text-small text-muted">{t.flaggedHint}</p>}
+      {rows.length > 0 && !flagged && (
         <p className="text-small text-muted">
           {t.summary(rows.filter((r) => r.status === 'POSTED').length, rows.length, new Set(rows.map((r) => r.billSerial)).size)}
         </p>
@@ -61,11 +69,15 @@ export function DeskSalesPanel({ canResolve }: { canResolve: boolean }) {
       {error && <p role="alert" className="text-small text-bad">{error}</p>}
       {note && <p role="status" className="text-small text-muted">{note}</p>}
       <div className="card overflow-hidden">
-        <DataList rows={rows} rowKey={(r) => r.id} empty={t.emptyAll} columns={[
+        <DataList rows={rows} rowKey={(r) => r.id} empty={flagged ? t.emptyFlagged : t.emptyAll} columns={[
           { key: 'item', header: t.item, primary: true, cell: (r) => (
             <span>
               <span className="block font-semibold text-ink">{r.itemName ?? t.unknownItem}</span>
               {r.reason && <span className="block text-micro text-muted">{reasonText(r.reason)}</span>}
+              {r.rxFlags.length > 0 && (
+                <span className="mt-1 flex flex-wrap gap-1">
+                  {r.rxFlags.map((f) => <Badge key={f} tone="warn" icon="⚑">{flagText(f)}</Badge>)}
+                </span>)}
             </span>) },
           { key: 'bill', header: t.bill, cell: (r) => (
             <span><span className="block tnum font-medium text-ink">{r.billSerial}</span><span className="block text-micro text-muted">{when(r.issuedAt)}</span></span>) },

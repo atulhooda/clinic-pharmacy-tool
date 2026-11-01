@@ -79,5 +79,6 @@ export const EXPECTED_OBJECTS: readonly ExpectedObject[] = [
   { kind: 'trigger', table: 'desk_return_lines', name: 'desk_return_lines_append_only', since: 28 },
   { kind: 'trigger', table: 'desk_return_allocations', name: 'desk_return_allocations_append_only', since: 28 },
   { kind: 'trigger', table: 'desk_return_allocations', name: 'desk_return_allocations_cap', since: 28 },
+  { kind: 'constraint', table: 'desk_sale_lines', name: 'desk_sale_lines_rx_flags', since: 30 },
   { kind: 'constraint', table: 'stock_movements', name: 'stock_movements_reference', since: 28 },
 ];

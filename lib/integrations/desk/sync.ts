@@ -5,14 +5,15 @@ import { AuthError, HttpError } from '../../http/errors';
 import { UUID_PATTERN } from '../../http/body';
 import { log } from '../../log';
 import { lockBalances, postMovements, type Actor } from '../../stock/ledger';
+import { SCHEDULES_SQL, USE_FOR_SQL } from '../../stock/items';
 import {
-  allocateAtStore, defaultStore, deskActor, deskIneligibility, deskItemsById, postSaleAllocations, quarantineOf, type DeskLineStatus,
+  allocateAtStore, defaultStore, deskActor, deskIneligibility, deskItemsById, postSaleAllocations, quarantineOf, rxFlagsOf, type DeskLineStatus,
 } from '../../stock/desk-sales';
 import type { DeskContext } from './route';
 
 /**
  * The pharmacy half of the desk ⇄ pharmacy stock sync (06a §9.3, §12.5; D-57):
- * - E-52 items: the retail products the desk may link a price-list line to, with stock and the highest MRP;
+ * - E-52 items: every active item, which the desk may put on a bill (D-66), with stock, the highest MRP, packs and flags;
  * - E-53 sales: an issued bill's lines take stock (FEFO), each line all or nothing, idempotent per (bill, line);
  * - E-54 returns: a credit note's lines put back what the bill line took, never more, idempotent per (credit note, line).
  * Every movement names the "Ritu Desk" system actor. The organisation and premises are the env's.
@@ -98,15 +99,27 @@ export interface DeskItemView {
   dispensableBase: number;
   maxMrpPaisePerBase: number | null;
   active: boolean;
+  /** D-66 (feed rev 2): resolved with the category's default (D-54), never null. */
+  useFor: 'PATIENTS' | 'IN_CLINIC' | 'BOTH';
+  trackBatches: boolean;
+  requiresPrescription: boolean;
+  /** Effective schedule flags (master ∪ extra), in SCHEDULE_FLAGS order. */
+  schedules: string[];
+  hsn: string | null;
+  /** The active, dispensable packs, base unit first: what a bill line may be counted in. */
+  units: { name: string; baseQty: number }[];
 }
 
 /**
- * The retail products given to patients (v1), active, with their stock at the env premises:
+ * Every active item, any category and any use (D-66), with its stock at the env premises:
  * - onHandBase: everything on hand there (any location, any batch);
- * - dispensableBase: what a sale can take: the default store, unexpired, not a placeholder batch;
+ * - dispensableBase: what a sale can take: the default store, unexpired, not a placeholder batch
+ *   (an untracked item: its store balance), the same candidates as allocateAtStore;
  * - maxMrpPaisePerBase: the highest MRP per base unit (rounded up) among batches with stock that
- *   is not quarantined, not expired and not a placeholder; null if there are none. The desk warns,
- *   never blocks, when a price is above it.
+ *   is not quarantined, not expired and not a placeholder; null if there are none (an untracked
+ *   item has no batch, so no MRP). The desk warns, never blocks, when a price is above it;
+ * - useFor, trackBatches, requiresPrescription, schedules, hsn and units (feed rev 2, D-66): what the
+ *   desk shows beside a pick and counts a bill line in. The desk treats a missing or bad one as unknown.
  */
 export async function deskItems(ctx: DeskContext): Promise<{ items: DeskItemView[] }> {
   return withDeskTx(ctx.orgId, async (db) => {
@@ -116,7 +129,9 @@ export async function deskItems(ctx: DeskContext): Promise<{ items: DeskItemView
       `WITH bal AS (
          SELECT b.item_id,
                 sum(b.on_hand)::int AS on_hand,
-                coalesce(sum(b.on_hand) FILTER (WHERE b.location_id = $3 AND bt.details_pending IS NOT TRUE AND bt.expiry_date >= $4::date), 0)::int AS dispensable,
+                -- The candidates allocateAtStore takes (R11-5): an untracked item's single balance, or a real, unexpired batch.
+                coalesce(sum(b.on_hand) FILTER (WHERE b.location_id = $3
+                  AND (b.batch_id IS NULL OR (bt.details_pending IS NOT TRUE AND bt.expiry_date >= $4::date))), 0)::int AS dispensable,
                 max(ceil(bt.mrp_paise::numeric / u.base_units_per_unit)) FILTER (
                   WHERE b.on_hand > 0 AND l.kind <> 'QUARANTINE' AND bt.details_pending IS NOT TRUE AND bt.expiry_date >= $4::date)::bigint AS max_mrp
            FROM stock_balances b
@@ -127,9 +142,15 @@ export async function deskItems(ctx: DeskContext): Promise<{ items: DeskItemView
           GROUP BY b.item_id)
        SELECT i.id, i.display_name AS "displayName", i.category, i.base_unit AS "baseUnit",
               coalesce(bal.on_hand, 0) AS "onHandBase", coalesce(bal.dispensable, 0) AS "dispensableBase",
-              bal.max_mrp AS "maxMrpPaisePerBase", i.active
-         FROM items i LEFT JOIN bal ON bal.item_id = i.id
-        WHERE i.org_id = $1 AND i.active AND i.category IN ('RETAIL_PRODUCT','MEDICINE') AND coalesce(i.use_for, 'PATIENTS') IN ('PATIENTS','BOTH')
+              bal.max_mrp AS "maxMrpPaisePerBase", i.active,
+              ${USE_FOR_SQL} AS "useFor", i.track_batches AS "trackBatches", i.requires_prescription AS "requiresPrescription",
+              ${SCHEDULES_SQL} AS schedules,
+              nullif(btrim(coalesce(i.hsn_code_override, m.hsn_code)), '') AS hsn,
+              (SELECT coalesce(jsonb_agg(jsonb_build_object('name', u.name, 'baseQty', u.base_units_per_unit)
+                                         ORDER BY u.is_base DESC, u.base_units_per_unit, lower(u.name)), '[]'::jsonb)
+                 FROM item_units u WHERE u.org_id = i.org_id AND u.item_id = i.id AND u.active AND u.dispensable) AS units
+         FROM items i LEFT JOIN medicine_master m ON m.id = i.master_id LEFT JOIN bal ON bal.item_id = i.id
+        WHERE i.org_id = $1 AND i.active
         ORDER BY lower(i.display_name)`,
       [ctx.orgId, ctx.premisesId, storeId, istDate(now())]);
     return { items: items.map((i) => ({ ...i, maxMrpPaisePerBase: i.maxMrpPaisePerBase === null ? null : Number(i.maxMrpPaisePerBase) })) };
@@ -169,11 +190,12 @@ async function storedSales(db: Db, ctx: DeskContext, billId: string, keys: strin
 }
 
 /**
- * Each new line, in body order: rejected (not a sellable item), or FEFO at the store under the
+ * Each new line, in body order: rejected (an unknown or removed item), or FEFO at the store under the
  * balance locks; fully allocated → POSTED with its DISPENSE movements, else SHORT with nothing
  * posted. The line row is inserted before any movement, ON CONFLICT DO NOTHING on (bill, line):
  * a line already stored (by an earlier call, or a concurrent one that committed first) moves
- * nothing and answers with what was stored.
+ * nothing and answers with what was stored. Every inserted line records its item's `rx_flags`
+ * (D-66: exposure, never a gate), short and rejected lines too; nothing recomputes them later.
  */
 export async function postDeskSales(ctx: DeskContext, input: SalesInput): Promise<{ lines: SaleLineResult[] }> {
   return withDeskTx(ctx.orgId, async (db) => {
@@ -195,12 +217,12 @@ export async function postDeskSales(ctx: DeskContext, input: SalesInput): Promis
         const status: DeskLineStatus = reject ? 'REJECTED' : r!.ok ? 'POSTED' : 'SHORT';
         const ins = await db.rows<{ id: string }>(
           `INSERT INTO desk_sale_lines (org_id, premises_id, bill_id, line_key, bill_serial, issued_at, requested_item_id, item_id, qty_base,
-                                        status, allocated_base, short_base, reason, location_id, received_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                                        status, allocated_base, short_base, reason, location_id, received_at, rx_flags)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::text[])
            ON CONFLICT ON CONSTRAINT desk_sale_lines_key DO NOTHING RETURNING id`,
           [ctx.orgId, ctx.premisesId, input.billId, l.lineKey, input.serial, input.issuedAt, l.itemId, item ? item.id : null, l.qtyBase,
             status, status === 'POSTED' ? l.qtyBase : 0, r && !r.ok ? r.shortBase : 0, reject ?? (r && !r.ok ? r.reason : null),
-            status === 'POSTED' ? storeId : null, at]);
+            status === 'POSTED' ? storeId : null, at, rxFlagsOf(item)]);
         // Stored first by a concurrent call: nothing moves here; its result is read below.
         if (ins.length === 0) continue;
         if (r && r.ok) await postSaleAllocations(db, actor, at, { id: ins[0].id, premisesId: ctx.premisesId, itemId: l.itemId, storeId }, r.allocations);

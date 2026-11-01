@@ -31,7 +31,13 @@ export const STORAGE = ['ROOM_TEMPERATURE', 'BELOW_25C', 'BELOW_30C', 'COLD_2_8C
 export const USE_FOR = ['PATIENTS', 'IN_CLINIC', 'BOTH'] as const;
 export type UseFor = (typeof USE_FOR)[number];
 /** An item with no choice yet: injectables and consumables are used in the clinic; the rest go to patients. */
-const USE_FOR_SQL = `coalesce(i.use_for, CASE WHEN i.category IN ('INJECTABLE','CONSUMABLE') THEN 'IN_CLINIC' ELSE 'PATIENTS' END)`;
+export const USE_FOR_SQL = `coalesce(i.use_for, CASE WHEN i.category IN ('INJECTABLE','CONSUMABLE') THEN 'IN_CLINIC' ELSE 'PATIENTS' END)`;
+/**
+ * The effective schedule flags (master ∪ extra) of `items i LEFT JOIN medicine_master m`, each once, in
+ * SCHEDULE_FLAGS order (D-66: the order the desk is sent them in).
+ */
+export const SCHEDULES_SQL = `ARRAY(SELECT f FROM unnest(ARRAY[${SCHEDULE_FLAGS.map((f) => `'${f}'`).join(',')}]::text[]) WITH ORDINALITY AS s(f, n)
+                                     WHERE f = ANY (coalesce(m.schedule_flags, '{}') || i.extra_schedule_flags) ORDER BY n)`;
 
 export interface Unit { id: string; name: string; baseUnitsPerUnit: number; isBase: boolean; dispensable: boolean; purchasable: boolean; active: boolean }
 export interface ItemView {

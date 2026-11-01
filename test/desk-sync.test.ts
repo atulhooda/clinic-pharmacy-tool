@@ -3,7 +3,9 @@
 // database, with synthetic organisations, items and bills only.
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
+import { readFileSync } from 'fs';
+import path from 'path';
 import { batch, createItem, grant, post, snapshot, stockWorld, asAppIn, type Item, type StockWorld } from './harness/stock';
 import { createOrg, inOrg } from './harness/fixtures';
 import { as } from './harness/env';
@@ -12,6 +14,8 @@ import { now, setClockForTests } from '../lib/clock';
 import { setQueryListener, wrap } from '../lib/db/db';
 import { verifySchema } from '../lib/db/selfcheck';
 import { signDeskRequest } from '../lib/integrations/desk/signature';
+import { parseReturns, parseSales } from '../lib/integrations/desk/sync';
+import { rxFlagsOf } from '../lib/stock/desk-sales';
 import { GET as deskItemsRoute } from '../app/api/integrations/desk/items/route';
 import { POST as deskSalesRoute } from '../app/api/integrations/desk/sales/route';
 import { POST as deskReturnsRoute } from '../app/api/integrations/desk/returns/route';
@@ -158,28 +162,97 @@ test('D-57: the organisation and premises come only from the env: a body cannot 
 
 // ---------------------------------------------------------------- E-52
 
-test('E-52 / D-59: only active retail products and medicines given to patients, with on-hand, dispensable and the highest MRP per base unit (rounded up)', async () => {
+test('E-52 / D-66: every active item, any category or use, with on-hand, dispensable, the highest MRP per base unit (rounded up) and the feed rev 2 fields', async () => {
   const w = await stockWorld('dsitems');
   const cream = await retail(w, 'Cream');
   const both = await retail(w, 'Shampoo', { useFor: 'BOTH' });
   const clinicOnly = await retail(w, 'Peel', { useFor: 'IN_CLINIC' });
   const removed = await retail(w, 'Old soap');
   await w.owner.call((await import('../app/api/dispensary/items/[id]/route')).PATCH, { method: 'PATCH', params: { id: removed.id }, body: { active: false } });
+  const inj = await createItem(w.owner, { category: 'INJECTABLE', displayName: `Ceftriaxone ${randomUUID().slice(0, 4)}`, baseUnit: 'VIAL' });
+  // Packs: base first, then by size; a pack not dispensable or no longer active is not offered.
+  const units = (await import('../app/api/dispensary/items/[id]/units/route')).POST;
+  const unit = (await import('../app/api/dispensary/items/[id]/units/[unitId]/route')).PATCH;
+  const addUnit = async (name: string, factor: number) => (await w.owner.call(units, { body: { name, baseUnitsPerUnit: factor }, params: { id: cream.id } })).body.id as string;
+  await addUnit('pair', 2);
+  const bulk = await addUnit('bulk', 5);
+  const tray = await addUnit('tray', 20);
+  assert.equal((await w.owner.call(unit, { method: 'PATCH', params: { id: cream.id, unitId: bulk }, body: { dispensable: false } })).status, 200);
+  assert.equal((await w.owner.call(unit, { method: 'PATCH', params: { id: cream.id, unitId: tray }, body: { active: false } })).status, 200);
+  // Schedules are master ∪ extra in H, H1, X, G, NDPS, H2 order; the item's HSN overrides the master's.
+  const masterOf = (flags: string[], hsn: string | null) => as('curator', async (c) => (await c.query(
+    `INSERT INTO medicine_master (brand_name, manufacturer_name, dosage_form, suggested_base_unit, salts, source, source_ref, schedule_flags, hsn_code)
+     VALUES ($1, 'Synthetic Maker', 'TABLET', 'TABLET', '[{"name":"synthetic"}]', 'test', $2, $3, $4) RETURNING id`,
+    [`Synthetic ${randomUUID().slice(0, 6)} tablet`, `ds-${randomUUID()}`, flags, hsn])).rows[0].id as string);
+  const sched = await createItem(w.owner, { masterId: await masterOf(['NDPS', 'H', 'G'], '3004'), category: 'MEDICINE', displayName: `Sched ${randomUUID().slice(0, 4)}`,
+    baseUnit: 'TABLET', extraScheduleFlags: ['X', 'H1', 'H'] });
+  const override = await createItem(w.owner, { masterId: await masterOf([], '3004'), category: 'MEDICINE', displayName: `Ovr ${randomUUID().slice(0, 4)}`,
+    baseUnit: 'TABLET', hsnCodeOverride: '30049099' });
   // Box of 10: 1005 paise a box is 100.5 a piece → 101; 900 a box → 90. Quarantined and placeholder stock count on hand only.
   await stock(w, cream, 7, day(100), { mrpPaise: 1005 });
   await stock(w, cream, 5, day(300), { mrpPaise: 900 });
   await stock(w, cream, 4, day(200), { mrpPaise: 5000, locationId: w.main.quarantine });
   await placeholder(w, cream, 3);
+  await post(w, [{ type: 'OPENING_BALANCE', itemId: w.glv.id, batchId: null, qtyDelta: 40 }]);
   on(w);
   const r = await desk(deskItemsRoute, 'GET', ITEMS);
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  const ids = (r.body.items as { id: string }[]).map((i) => i.id);
-  assert.ok(ids.includes(cream.id) && ids.includes(both.id) && ids.includes(w.pcm.id), 'retail products and medicines (D-59)');
-  assert.ok(!ids.includes(clinicOnly.id) && !ids.includes(removed.id) && !ids.includes(w.glv.id), 'given to patients, active, never a consumable');
-  const c = r.body.items.find((i: { id: string }) => i.id === cream.id);
+  const byId = new Map((r.body.items as Record<string, unknown>[]).map((i) => [i.id as string, i]));
+  for (const [it, what] of [[cream, 'a retail product'], [both, 'a BOTH item'], [clinicOnly, 'an item used in the clinic'], [w.pcm, 'a medicine'],
+    [w.glv, 'an untracked consumable'], [inj, 'an injectable'], [sched, 'a scheduled medicine']] as const) {
+    assert.ok(byId.has(it.id), `${what} is listed (D-66)`);
+  }
+  assert.ok(!byId.has(removed.id), 'a removed item is still left out');
+  const c = byId.get(cream.id)!;
   assert.deepEqual({ onHand: c.onHandBase, dispensable: c.dispensableBase, maxMrp: c.maxMrpPaisePerBase, category: c.category, baseUnit: c.baseUnit, active: c.active },
     { onHand: 19, dispensable: 12, maxMrp: 101, category: 'RETAIL_PRODUCT', baseUnit: 'PIECE', active: true });
-  assert.equal(r.body.items.find((i: { id: string }) => i.id === both.id).maxMrpPaisePerBase, null, 'no stock: no MRP');
+  assert.equal(byId.get(both.id)!.maxMrpPaisePerBase, null, 'no stock: no MRP');
+  assert.deepEqual([...[cream, both, clinicOnly, w.pcm, w.glv, inj].map((i) => byId.get(i.id)!.useFor)],
+    ['PATIENTS', 'BOTH', 'IN_CLINIC', 'PATIENTS', 'IN_CLINIC', 'IN_CLINIC'], 'useFor resolved with the category default (D-54), never null');
+  assert.deepEqual(c.units, [{ name: 'piece', baseQty: 1 }, { name: 'pair', baseQty: 2 }, { name: 'box', baseQty: 10 }]);
+  assert.deepEqual(byId.get(inj.id)!.units, [{ name: 'vial', baseQty: 1 }]);
+  const g = byId.get(w.glv.id)!;
+  assert.deepEqual([g.trackBatches, g.dispensableBase, g.maxMrpPaisePerBase], [false, 40, null], 'untracked: its store balance is dispensable, and it has no MRP');
+  const sc = byId.get(sched.id)!;
+  assert.deepEqual([sc.schedules, sc.requiresPrescription, sc.hsn], [['H', 'H1', 'X', 'G', 'NDPS'], true, '3004'], 'master ∪ extra, each once, in canonical order (not alphabetical); Schedule X imposes Rx');
+  assert.deepEqual([byId.get(override.id)!.hsn, byId.get(override.id)!.schedules, c.hsn, c.schedules], ['30049099', [], null, []], 'the override wins');
+});
+
+// ---------------------------------------------------------------- the shared contract fixture (D-66)
+
+// The same file, byte for byte, is the desk's scripts/fixtures/desk-sync-contract.json; the desk's test pins the same hash.
+const FIXTURE = path.join(process.cwd(), 'test', 'fixtures', 'desk-sync-contract.json');
+const CONTRACT_FIXTURE_SHA256 = 'dbd0579396a5787b019e62fa32c1a2b34f48ac75a44786dbfb1a005b28968257';
+const contract = JSON.parse(readFileSync(FIXTURE, 'utf8'));
+const jsonType = (v: unknown) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
+
+test('D-66 contract: the fixture is the agreed one, and every real E-52 row has the shape of the fixture\'s rev 2 items', async () => {
+  assert.equal(createHash('sha256').update(readFileSync(FIXTURE)).digest('hex'), CONTRACT_FIXTURE_SHA256);
+  const shape = contract.feed.items.slice(0, 5) as Record<string, unknown>[];
+  const keys = Object.keys(shape[0]).sort();
+  for (const f of shape) assert.deepEqual(Object.keys(f).sort(), keys, 'fixture items 0–4 share one key set');
+  const types = new Map(keys.map((k) => [k, new Set(shape.map((f) => jsonType(f[k])))]));
+  const w = await stockWorld('dscontract');
+  const inj = await createItem(w.owner, { category: 'INJECTABLE', displayName: `Inj ${randomUUID().slice(0, 4)}`, baseUnit: 'VIAL', extraScheduleFlags: ['H'], requiresPrescription: true,
+    hsnCodeOverride: '30042019' });
+  await stock(w, inj, 3, day(200));
+  await post(w, [{ type: 'OPENING_BALANCE', itemId: w.glv.id, batchId: null, qtyDelta: 5 }]);
+  on(w);
+  const rows = (await desk(deskItemsRoute, 'GET', ITEMS)).body.items as Record<string, unknown>[];
+  assert.ok(rows.length >= 3);
+  for (const row of rows) {
+    assert.deepEqual(Object.keys(row).sort(), keys, `${row.displayName}: the key set`);
+    for (const k of keys) assert.ok(types.get(k)!.has(jsonType(row[k])), `${row.displayName}.${k}: ${jsonType(row[k])} is one of ${[...types.get(k)!]}`);
+    for (const u of row.units as Record<string, unknown>[]) assert.deepEqual([Object.keys(u).sort(), typeof u.name, Number.isInteger(u.baseQty)], [['baseQty', 'name'], 'string', true]);
+  }
+  // The fixture's sale and return parse as E-53 and E-54 bodies; real answers have the fixture answers' keys.
+  const parsed = parseSales(contract.sale);
+  assert.deepEqual(parsed.lines, contract.sale.lines);
+  assert.equal(parsed.issuedAt.toISOString(), contract.sale.issuedAt);
+  assert.deepEqual(parseReturns(contract.return).lines, contract.return.lines);
+  const s = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'l1', itemId: inj.id, qtyBase: 1 }, { lineKey: 'l2', itemId: w.glv.id, qtyBase: 1 }]));
+  for (const l of s.body.lines) assert.deepEqual(Object.keys(l).sort(), Object.keys(contract.saleAnswerNew.lines[0]).sort());
+  assert.deepEqual(s.body.lines.map((l: { status: string }) => l.status), ['posted', 'posted'], 'the injectable and the consumable both take stock now (saleAnswerNew, not saleAnswerOld)');
 });
 
 // ---------------------------------------------------------------- E-53
@@ -247,25 +320,132 @@ test('E-53: expired, quarantined and placeholder stock is never taken; a short l
   assert.deepEqual((await movements(w, item.id)).map((m) => [m.batchId, m.qty]), [[real, -2]], 'only the real, unexpired store batch');
 });
 
-test('E-53 / D-59: a medicine sells like a retail product; a consumable, an item used in clinic, or one not in this pharmacy is rejected and moves nothing', async () => {
+test('E-53 / D-66: any active item sells: a consumable, an item used in the clinic, an H1 injectable and a Schedule X medicine take stock; only unknown and removed items are refused', async () => {
   const w = await stockWorld('dsrej');
   const peel = await retail(w, 'Peel', { useFor: 'IN_CLINIC' });
   await stock(w, peel, 10, day(200));
+  const cream = await retail(w, 'Cream');
+  await stock(w, cream, 10, day(200));
+  const removed = await retail(w, 'Old soap');
+  await stock(w, removed, 10, day(200));
+  await w.owner.call((await import('../app/api/dispensary/items/[id]/route')).PATCH, { method: 'PATCH', params: { id: removed.id }, body: { active: false } });
+  const inj = await createItem(w.owner, { category: 'INJECTABLE', displayName: `Inj H1 ${randomUUID().slice(0, 4)}`, baseUnit: 'VIAL', extraScheduleFlags: ['H1'], requiresPrescription: true });
+  await stock(w, inj, 5, day(200));
+  const xMed = await createItem(w.owner, { category: 'MEDICINE', displayName: `X med ${randomUUID().slice(0, 4)}`, baseUnit: 'TABLET', extraScheduleFlags: ['X'] });
+  await stock(w, xMed, 10, day(200));
   const pcmBatch = await batch(w, { expiry: day(200) });
   await post(w, [{ type: 'OPENING_BALANCE', batchId: pcmBatch, qtyDelta: 30 }]);
   await post(w, [{ type: 'OPENING_BALANCE', itemId: w.glv.id, batchId: null, qtyDelta: 100 }]);
   on(w);
+  const billId = randomUUID();
   const r = await desk(deskSalesRoute, 'POST', SALES, sale([
-    { lineKey: 'med', itemId: w.pcm.id, qtyBase: 1 }, { lineKey: 'gloves', itemId: w.glv.id, qtyBase: 1 }, { lineKey: 'peel', itemId: peel.id, qtyBase: 1 },
-    { lineKey: 'ghost', itemId: randomUUID(), qtyBase: 1 }]));
+    { lineKey: 'med', itemId: w.pcm.id, qtyBase: 1 }, { lineKey: 'gloves', itemId: w.glv.id, qtyBase: 3 }, { lineKey: 'peel', itemId: peel.id, qtyBase: 1 },
+    { lineKey: 'inj', itemId: inj.id, qtyBase: 2 }, { lineKey: 'x', itemId: xMed.id, qtyBase: 4 }, { lineKey: 'cream', itemId: cream.id, qtyBase: 1 },
+    { lineKey: 'injshort', itemId: inj.id, qtyBase: 99 }, { lineKey: 'ghost', itemId: randomUUID(), qtyBase: 1 }, { lineKey: 'gone', itemId: removed.id, qtyBase: 1 }], billId));
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(r.body.lines.map((l: { status: string; reason?: string }) => [l.status, l.reason ?? null]),
-    [['posted', null], ['rejected', 'not_retail_product'], ['rejected', 'not_for_patients'], ['rejected', 'unknown_item']]);
+  assert.deepEqual(r.body.lines.map((l: { lineKey: string; status: string; reason?: string }) => [l.lineKey, l.status, l.reason ?? null]), [
+    ['med', 'posted', null], ['gloves', 'posted', null], ['peel', 'posted', null], ['inj', 'posted', null], ['x', 'posted', null], ['cream', 'posted', null],
+    ['injshort', 'short', 'insufficient_stock'], ['ghost', 'rejected', 'unknown_item'], ['gone', 'rejected', 'item_inactive']]);
   assert.deepEqual((await movements(w, w.pcm.id)).map((m) => [m.batchId, m.qty]), [[pcmBatch, -1]], 'the medicine moved, by FEFO');
-  assert.equal((await movements(w, w.glv.id)).length + (await movements(w, peel.id)).length, 0);
+  assert.deepEqual((await movements(w, w.glv.id)).map((m) => [m.batchId, m.qty]), [[null, -3]], 'the untracked consumable moved');
+  assert.deepEqual([(await movements(w, peel.id)).map((m) => m.qty), (await movements(w, inj.id)).map((m) => m.qty), (await movements(w, xMed.id)).map((m) => m.qty)],
+    [[-1], [-2], [-4]], 'the in-clinic item, the injectable and the Schedule X medicine moved');
+  assert.equal((await movements(w, removed.id)).length, 0, 'a removed item moves nothing');
+  // D-66: each line records what it was exposed to, short and rejected lines too; never a gate.
+  const flags = new Map((await inOrg(w.org.orgId, async (c) => (await c.query(
+    'SELECT line_key, rx_flags FROM desk_sale_lines WHERE bill_id = $1', [billId])).rows)).map((x: { line_key: string; rx_flags: string[] }) => [x.line_key, x.rx_flags]));
+  assert.deepEqual(Object.fromEntries(flags), {
+    med: [], gloves: ['consumable', 'in_clinic_item'], peel: ['in_clinic_item'],
+    inj: ['requires_prescription', 'schedule_h1', 'injectable', 'in_clinic_item'], x: ['requires_prescription', 'schedule_x'],
+    cream: [], injshort: ['requires_prescription', 'schedule_h1', 'injectable', 'in_clinic_item'], ghost: [], gone: [],
+  });
+  // E-55 shows them, and `flagged` lists only the flagged lines.
+  const all = (await w.owner.call(deskSalesList, { path: '/api/dispensary/desk-sales?status=all' })).body.items as { lineKey: string; rxFlags: string[] }[];
+  assert.deepEqual(all.find((i) => i.lineKey === 'x')!.rxFlags, ['requires_prescription', 'schedule_x']);
+  const flagged = await w.owner.call(deskSalesList, { path: '/api/dispensary/desk-sales?status=flagged' });
+  assert.equal(flagged.status, 200, JSON.stringify(flagged.body));
+  assert.deepEqual((flagged.body.items as { lineKey: string }[]).map((i) => i.lineKey).sort(), ['gloves', 'inj', 'injshort', 'peel', 'x']);
+  assert.equal((await w.owner.call(deskSalesList, { path: '/api/dispensary/desk-sales?status=nope' })).status, 422);
   const bad = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'a', itemId: peel.id, qtyBase: 1 }, { lineKey: 'a', itemId: peel.id, qtyBase: 1 }]));
   assert.deepEqual([bad.status, bad.body.code], [422, 'DUPLICATE_LINE_KEY']);
   assert.equal((await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'a', itemId: peel.id, qtyBase: 0 }]))).status, 422);
+});
+
+test('D-66: rxFlagsOf lists the flags in RX_FLAGS order, and an unknown item has none', () => {
+  const item = (o: Partial<Parameters<typeof rxFlagsOf>[0] & object>) => ({ id: 'x', category: 'MEDICINE', useFor: 'PATIENTS', active: true, requiresPrescription: false, schedules: [], ...o });
+  assert.deepEqual(rxFlagsOf(undefined), []);
+  assert.deepEqual(rxFlagsOf(item({ category: 'RETAIL_PRODUCT' })), []);
+  assert.deepEqual(rxFlagsOf(item({ requiresPrescription: true, schedules: ['H', 'H1', 'X', 'G', 'NDPS', 'H2'] })),
+    ['requires_prescription', 'schedule_h', 'schedule_h1', 'schedule_x', 'schedule_g', 'schedule_h2', 'ndps']);
+  assert.deepEqual(rxFlagsOf(item({ category: 'INJECTABLE', useFor: 'IN_CLINIC', schedules: ['NDPS'] })), ['ndps', 'injectable', 'in_clinic_item']);
+  assert.deepEqual(rxFlagsOf(item({ category: 'CONSUMABLE', useFor: 'BOTH' })), ['consumable']);
+  assert.deepEqual(rxFlagsOf(item({ active: false, useFor: 'IN_CLINIC' })), ['in_clinic_item'], 'an inactive item keeps its flags (the line is rejected anyway)');
+});
+
+test('R11-5 / D-66: the feed\'s dispensableBase is exactly what a sale can take, for an untracked item and for a tracked one with expired and placeholder stock', async () => {
+  const w = await stockWorld('dsr115');
+  await post(w, [{ type: 'OPENING_BALANCE', itemId: w.glv.id, batchId: null, qtyDelta: 60 }]);
+  const gel = await retail(w, 'Gel');
+  await stock(w, gel, 7, day(200));
+  const expired = await stock(w, gel, 9, day(100));
+  const { asOwnerIn } = await import('./harness/stock');
+  assert.equal(await asOwnerIn(w.org.orgId, 'UPDATE batches SET expiry_date = $2 WHERE org_id = $1 AND id = $3', [w.org.orgId, day(-1), expired]), null);
+  await placeholder(w, gel, 4);
+  on(w);
+  const feed = new Map(((await desk(deskItemsRoute, 'GET', ITEMS)).body.items as { id: string; dispensableBase: number }[]).map((i) => [i.id, i.dispensableBase]));
+  assert.deepEqual([feed.get(w.glv.id), feed.get(gel.id)], [60, 7]);
+  for (const [it, n] of [[w.glv, 60], [gel, 7]] as const) {
+    const over = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'k', itemId: it.id, qtyBase: n + 1 }]));
+    assert.deepEqual([over.body.lines[0].status, over.body.lines[0].shortBase], ['short', 1], `${n + 1} is one more than the feed said`);
+    const exact = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'k', itemId: it.id, qtyBase: n }]));
+    assert.equal(exact.body.lines[0].status, 'posted', `${n} is what the feed said`);
+  }
+  const after = new Map(((await desk(deskItemsRoute, 'GET', ITEMS)).body.items as { id: string; dispensableBase: number }[]).map((i) => [i.id, i.dispensableBase]));
+  assert.deepEqual([after.get(w.glv.id), after.get(gel.id)], [0, 0]);
+});
+
+test('D-66 / migration 030: rx_flags never changes after insert (the guard, during a resolve too), holds only known flags, and the app role cannot update it', async () => {
+  const w = await stockWorld('dsrxguard');
+  const inj = await createItem(w.owner, { category: 'INJECTABLE', displayName: `Inj ${randomUUID().slice(0, 4)}`, baseUnit: 'VIAL' });
+  on(w);
+  const billId = randomUUID();
+  const r = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'L1', itemId: inj.id, qtyBase: 2 }], billId));
+  assert.equal(r.body.lines[0].status, 'short');
+  const { asOwnerIn } = await import('./harness/stock');
+  const where = `WHERE org_id = $1 AND bill_id = $2 AND line_key = 'L1'`;
+  assert.equal(await asOwnerIn(w.org.orgId, `UPDATE desk_sale_lines SET short_base = 1 ${where}`, [w.org.orgId, billId]), null, 'control: a SHORT line may change its shortfall');
+  assert.equal((await asOwnerIn(w.org.orgId, `UPDATE desk_sale_lines SET rx_flags = '{}' ${where}`, [w.org.orgId, billId]))?.hint, 'DESK_SALE_FIXED');
+  assert.equal((await asOwnerIn(w.org.orgId, `UPDATE desk_sale_lines SET status = 'SHORT', short_base = 2, reason = 'insufficient_stock', rx_flags = '{ndps}' ${where}`,
+    [w.org.orgId, billId]))?.hint, 'DESK_SALE_FIXED', 'a resolve-shaped update cannot rewrite the flags');
+  const insert = (flags: string) => asAppIn(w.org.orgId, `INSERT INTO desk_sale_lines (org_id, premises_id, bill_id, line_key, bill_serial, issued_at, requested_item_id,
+      item_id, qty_base, status, allocated_base, short_base, reason, received_at, rx_flags) VALUES ($1, $2, $3, 'L2', 'S', now(), $4, $4, 1, 'REJECTED', 0, 0, 'unknown_item', now(), $5)`,
+    [w.org.orgId, w.main.id, billId, inj.id, flags]);
+  assert.equal((await insert('{bogus}'))?.constraint, 'desk_sale_lines_rx_flags', 'only the known flags');
+  assert.equal(await insert('{ndps,consumable}'), null);
+  assert.equal((await asAppIn(w.org.orgId, `UPDATE desk_sale_lines SET rx_flags = '{}' ${where}`, [w.org.orgId, billId]))?.code, '42501', 'no column grant');
+  // A real resolve keeps them.
+  await stock(w, inj, 5, day(200));
+  const line = (await w.owner.call(deskSalesList, { path: '/api/dispensary/desk-sales' })).body.items.find((i: { billId: string; lineKey: string }) => i.billId === billId && i.lineKey === 'L1');
+  const done = await w.owner.call(deskResolve, { params: { id: line.id }, body: {}, headers: { 'reauth-grant': await grant(w.owner, w.aa, 'stock.adjust', w.main.id) } });
+  assert.deepEqual([done.status, done.body.status, done.body.rxFlags], [200, 'POSTED', ['injectable', 'in_clinic_item']], JSON.stringify(done.body));
+});
+
+test('E-56 / D-66: Retry posts a line stored as rejected under the older rule (not_retail_product), and keeps its stored flags', async () => {
+  const w = await stockWorld('dsoldrule');
+  await post(w, [{ type: 'OPENING_BALANCE', itemId: w.glv.id, batchId: null, qtyDelta: 10 }]);
+  on(w);
+  const billId = randomUUID();
+  assert.equal(await asAppIn(w.org.orgId, `INSERT INTO desk_sale_lines (org_id, premises_id, bill_id, line_key, bill_serial, issued_at, requested_item_id, item_id, qty_base,
+      status, allocated_base, short_base, reason, received_at) VALUES ($1, $2, $3, 'L1', 'OLD-1', now(), $4, $4, 4, 'REJECTED', 0, 0, 'not_retail_product', now())`,
+  [w.org.orgId, w.main.id, billId, w.glv.id]), null);
+  const line = (await w.owner.call(deskSalesList, { path: '/api/dispensary/desk-sales' })).body.items.find((i: { billId: string }) => i.billId === billId);
+  assert.deepEqual([line.status, line.reason, line.rxFlags], ['REJECTED', 'not_retail_product', []]);
+  const done = await w.owner.call(deskResolve, { params: { id: line.id }, body: {}, headers: { 'reauth-grant': await grant(w.owner, w.aa, 'stock.adjust', w.main.id) } });
+  assert.equal(done.status, 200, JSON.stringify(done.body));
+  assert.deepEqual([done.body.status, done.body.allocatedBase, done.body.reason, done.body.rxFlags], ['POSTED', 4, null, []], 'posted; the flags are not recomputed');
+  assert.deepEqual((await movements(w, w.glv.id)).map((m) => [m.qty, m.actor]), [[-4, w.aa.name]]);
+  const again = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'L1', itemId: w.glv.id, qtyBase: 4 }], billId));
+  assert.deepEqual(again.body.lines[0], { lineKey: 'L1', status: 'posted', allocatedBase: 4, shortBase: 0, reason: null }, 'the desk\'s Send again sees it posted');
 });
 
 test('E-53: two posts of the same line at once give one set of movements and the same answer', async () => {
