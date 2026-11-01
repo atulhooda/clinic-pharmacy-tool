@@ -1,5 +1,5 @@
 {
-  "rev": "DESK-SYNC-V1 feed rev 2 (D-66)",
+  "rev": "DESK-SYNC-V1 feed rev 2 (D-66); E-53 patientName/patientId/doctorName and E-54 serial, all optional (D-67)",
   "feed": {
     "items": [
       {"id":"0b9a1c2e-0000-4000-8000-000000000001","displayName":"Dolo 650","category":"MEDICINE","baseUnit":"TABLET","onHandBase":150,"dispensableBase":120,"maxMrpPaisePerBase":205,"active":true,"useFor":"PATIENTS","trackBatches":true,"requiresPrescription":false,"schedules":[],"hsn":"3004","units":[{"name":"Tablet","baseQty":1},{"name":"Strip of 15","baseQty":15}]},
@@ -21,8 +21,10 @@
     {"id":"0b9a1c2e-0000-4000-8000-000000000007","useFor":null,"trackBatches":null,"requiresPrescription":null,"schedules":["H"],"hsn":null,"units":[{"name":"Tablet","baseQty":1}]}
   ],
   "sale": {"billId":"5d0c7e1a-0000-4000-8000-0000000000b1","serial":"INV/2026-27/0042","issuedAt":"2026-11-01T09:30:00.000Z","lines":[{"lineKey":"l1","itemId":"0b9a1c2e-0000-4000-8000-000000000001","qtyBase":30},{"lineKey":"l2","itemId":"0b9a1c2e-0000-4000-8000-000000000002","qtyBase":1},{"lineKey":"l3","itemId":"0b9a1c2e-0000-4000-8000-000000000003","qtyBase":100}]},
+  "saleWithParty": {"billId":"5d0c7e1a-0000-4000-8000-0000000000b1","serial":"INV/2026-27/0042","issuedAt":"2026-11-01T09:30:00.000Z","lines":[{"lineKey":"l1","itemId":"0b9a1c2e-0000-4000-8000-000000000001","qtyBase":30},{"lineKey":"l2","itemId":"0b9a1c2e-0000-4000-8000-000000000002","qtyBase":1},{"lineKey":"l3","itemId":"0b9a1c2e-0000-4000-8000-000000000003","qtyBase":100}],"patientName":"Test Patient","patientId":"5d0c7e1a-0000-4000-8000-0000000000a1","doctorName":"Dr Test Doctor"},
   "saleAnswerNew": {"lines":[{"lineKey":"l1","status":"posted","allocatedBase":30,"shortBase":0,"reason":null},{"lineKey":"l2","status":"posted","allocatedBase":1,"shortBase":0,"reason":null},{"lineKey":"l3","status":"posted","allocatedBase":100,"shortBase":0,"reason":null}]},
   "saleAnswerOld": {"lines":[{"lineKey":"l1","status":"posted","allocatedBase":30,"shortBase":0,"reason":null},{"lineKey":"l2","status":"rejected","allocatedBase":0,"shortBase":0,"reason":"not_retail_product"},{"lineKey":"l3","status":"rejected","allocatedBase":0,"shortBase":0,"reason":"not_retail_product"}]},
   "return": {"creditNoteId":"5d0c7e1a-0000-4000-8000-0000000000c1","billId":"5d0c7e1a-0000-4000-8000-0000000000b1","lines":[{"lineKey":"l1","qtyBase":30}]},
+  "returnWithSerial": {"creditNoteId":"5d0c7e1a-0000-4000-8000-0000000000c1","billId":"5d0c7e1a-0000-4000-8000-0000000000b1","lines":[{"lineKey":"l1","qtyBase":30}],"serial":"CN/2026-27/0007"},
   "returnAnswer": {"lines":[{"lineKey":"l1","status":"returned","returnedBase":30,"reason":null}]}
 }

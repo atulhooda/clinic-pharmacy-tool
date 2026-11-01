@@ -14,8 +14,8 @@ import { now, setClockForTests } from '../lib/clock';
 import { setQueryListener, wrap } from '../lib/db/db';
 import { verifySchema } from '../lib/db/selfcheck';
 import { signDeskRequest } from '../lib/integrations/desk/signature';
-import { parseReturns, parseSales } from '../lib/integrations/desk/sync';
-import { rxFlagsOf } from '../lib/stock/desk-sales';
+import { optionalText, parseReturns, parseSales } from '../lib/integrations/desk/sync';
+import { billsOf, deskLineState, rxFlagsOf, type DeskSaleView } from '../lib/stock/desk-sales';
 import { GET as deskItemsRoute } from '../app/api/integrations/desk/items/route';
 import { POST as deskSalesRoute } from '../app/api/integrations/desk/sales/route';
 import { POST as deskReturnsRoute } from '../app/api/integrations/desk/returns/route';
@@ -222,7 +222,7 @@ test('E-52 / D-66: every active item, any category or use, with on-hand, dispens
 
 // The same file, byte for byte, is the desk's scripts/fixtures/desk-sync-contract.json; the desk's test pins the same hash.
 const FIXTURE = path.join(process.cwd(), 'test', 'fixtures', 'desk-sync-contract.json');
-const CONTRACT_FIXTURE_SHA256 = 'dbd0579396a5787b019e62fa32c1a2b34f48ac75a44786dbfb1a005b28968257';
+const CONTRACT_FIXTURE_SHA256 = 'b51fc005a77f651aa922cd7dad2dab1b36b778f7e56e4cbd81dfa5e06ffa3a17';
 const contract = JSON.parse(readFileSync(FIXTURE, 'utf8'));
 const jsonType = (v: unknown) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
 
@@ -250,6 +250,17 @@ test('D-66 contract: the fixture is the agreed one, and every real E-52 row has 
   assert.deepEqual(parsed.lines, contract.sale.lines);
   assert.equal(parsed.issuedAt.toISOString(), contract.sale.issuedAt);
   assert.deepEqual(parseReturns(contract.return).lines, contract.return.lines);
+  // D-67: the optional fields, both ways: the old bodies carry none; the new ones parse to exactly them, and nothing else changes.
+  assert.deepEqual(parseSales(contract.sale).party, { patientName: null, patientRef: null, doctorName: null });
+  const withParty = parseSales(contract.saleWithParty);
+  assert.deepEqual(withParty.party, { patientName: contract.saleWithParty.patientName, patientRef: contract.saleWithParty.patientId, doctorName: contract.saleWithParty.doctorName });
+  assert.deepEqual({ ...withParty, party: null }, { ...parsed, party: null });
+  const { patientName: _n, patientId: _i, doctorName: _d, ...stripped } = contract.saleWithParty;
+  assert.deepEqual(stripped, contract.sale, 'saleWithParty is sale plus the three optional fields');
+  assert.equal(parseReturns(contract.return).serial, null);
+  assert.equal(parseReturns(contract.returnWithSerial).serial, contract.returnWithSerial.serial);
+  const { serial: _s, ...plainReturn } = contract.returnWithSerial;
+  assert.deepEqual(plainReturn, contract.return, 'returnWithSerial is return plus serial');
   const s = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'l1', itemId: inj.id, qtyBase: 1 }, { lineKey: 'l2', itemId: w.glv.id, qtyBase: 1 }]));
   for (const l of s.body.lines) assert.deepEqual(Object.keys(l).sort(), Object.keys(contract.saleAnswerNew.lines[0]).sort());
   assert.deepEqual(s.body.lines.map((l: { status: string }) => l.status), ['posted', 'posted'], 'the injectable and the consumable both take stock now (saleAnswerNew, not saleAnswerOld)');
@@ -633,11 +644,13 @@ test('D-57: RLS and the self-check stay green with the new tables (forced RLS, t
   on(w);
   await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 1 }]));
   const other = await createOrg('dsrls2');
-  for (const t of ['desk_sale_lines', 'desk_sync_nonces', 'desk_sale_allocations', 'desk_return_lines', 'desk_return_allocations']) {
+  await desk(deskSalesRoute, 'POST', SALES, { ...sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 1 }]), patientName: 'Test Patient' });
+  for (const t of ['desk_sale_lines', 'desk_sync_nonces', 'desk_sale_allocations', 'desk_return_lines', 'desk_return_allocations', 'desk_sale_bills']) {
     const seen = await inOrg(other.orgId, async (c) => (await c.query(`SELECT count(*)::int AS n FROM ${t}`)).rows[0].n);
     assert.equal(seen, 0, `${t}: another tenant sees none`);
   }
-  assert.equal(await inOrg(w.org.orgId, async (c) => (await c.query('SELECT count(*)::int AS n FROM desk_sale_lines')).rows[0].n), 1);
+  assert.equal(await inOrg(w.org.orgId, async (c) => (await c.query('SELECT count(*)::int AS n FROM desk_sale_lines')).rows[0].n), 2);
+  assert.equal(await inOrg(w.org.orgId, async (c) => (await c.query('SELECT count(*)::int AS n FROM desk_sale_bills')).rows[0].n), 1);
   const status = await as('app', (c) => verifySchema(wrap(c)));
   assert.deepEqual(status.failures, []);
   assert.equal(status.ok, true);
@@ -731,4 +744,148 @@ test('D-57: the body is capped at 256 KB while it is read (413, signed or not), 
     setQueryListener(null);
   }
   assert.equal(queries, 0, 'no query (not even the self-check) before the signature holds');
+});
+
+// ---------------------------------------------------------------- D-67: Desk sales shows everything, as it stands now
+
+type ListLine = DeskSaleView;
+type ListBill = { billId: string; billSerial: string; issuedAt: string; patientName: string | null; patientRef: string | null; doctorName: string | null; lines: ListLine[] };
+const deskLog = async (w: StockWorld, status = 'all') => {
+  const r = await w.owner.call(deskSalesList, { path: `/api/dispensary/desk-sales?status=${status}` });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  return r.body as { items: ListLine[]; bills: ListBill[]; open: number };
+};
+const billRows = (w: StockWorld) => inOrg(w.org.orgId, async (c) => (await c.query(
+  'SELECT bill_id AS "billId", patient_name AS "patientName", patient_ref AS "patientRef", doctor_name AS "doctorName" FROM desk_sale_bills ORDER BY received_at')).rows);
+
+test('D-67 E-53: the patient and the doctor are optional; an old desk sends none and the bill shows none; a later resend fills them once; a bad value is dropped, never a 422', async () => {
+  const w = await stockWorld('dsparty');
+  const item = await retail(w, 'Gel');
+  await stock(w, item, 20, day(200));
+  on(w);
+  const billId = randomUUID();
+  const body = sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 2 }], billId);
+  // An old desk: no party fields at all. Works exactly as before, and stores no bill row.
+  const old = await desk(deskSalesRoute, 'POST', SALES, body);
+  assert.equal(old.status, 200, JSON.stringify(old.body));
+  assert.deepEqual(old.body.lines, [{ lineKey: 'L1', status: 'posted', allocatedBase: 2, shortBase: 0, reason: null }]);
+  assert.deepEqual(await billRows(w), []);
+  let b = (await deskLog(w)).bills.find((x) => x.billId === billId)!;
+  assert.deepEqual([b.patientName, b.patientRef, b.doctorName, b.lines.length], [null, null, null, 1]);
+  // The new desk sends the same bill again (its recheck): the same answer, nothing moves, and the bill gains its people.
+  const ref = randomUUID().toUpperCase();
+  const again = await desk(deskSalesRoute, 'POST', SALES, { ...body, patientName: '  Test   Patient ', patientId: ref, doctorName: 'Dr Test' });
+  assert.deepEqual(again.body, old.body);
+  assert.equal((await movements(w, item.id)).length, 1, 'nothing more moved');
+  b = (await deskLog(w)).bills.find((x) => x.billId === billId)!;
+  assert.deepEqual([b.patientName, b.patientRef, b.doctorName], ['Test Patient', ref.toLowerCase(), 'Dr Test']);
+  assert.ok(b.lines.every((l) => l.patientName === 'Test Patient'));
+  // Written once: a third send naming someone else changes nothing (an issued bill never changes at the desk).
+  await desk(deskSalesRoute, 'POST', SALES, { ...body, patientName: 'Someone Else', doctorName: null });
+  assert.deepEqual((await billRows(w)).map((r) => r.patientName), ['Test Patient']);
+  // Bad values are dropped one by one, never refused: a number, a bad id, blank, control characters, too long.
+  const bad = await desk(deskSalesRoute, 'POST', SALES, { ...sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 1 }]), patientName: 42, patientId: 'nope', doctorName: '   ' });
+  assert.equal(bad.status, 200, JSON.stringify(bad.body));
+  assert.equal(bad.body.lines[0].status, 'posted');
+  assert.equal((await billRows(w)).length, 1, 'nothing usable: no bill row');
+  const odd = randomUUID();
+  const r = await desk(deskSalesRoute, 'POST', SALES, { ...sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 1 }], odd), patientName: 'A\u0000B\n\tC', doctorName: 'D'.repeat(300) });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const oddRow = (await billRows(w)).find((x) => x.billId === odd)!;
+  assert.deepEqual([oddRow.patientName, oddRow.patientRef, oddRow.doctorName], ['A B C', null, 'D'.repeat(120)]);
+  // Only the three named fields are new: any other unknown field is still refused, and nothing is stored.
+  const unknown = randomUUID();
+  const u = await desk(deskSalesRoute, 'POST', SALES, { ...sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 1 }], unknown), patientName: 'Test Patient', patientPhone: '0' });
+  assert.deepEqual([u.status, u.body.code, u.body.details?.field], [422, 'UNKNOWN_FIELD', 'patientPhone']);
+  assert.ok(!(await billRows(w)).some((x) => x.billId === unknown));
+  assert.ok(!(await deskLog(w)).bills.some((x) => x.billId === unknown));
+  // The table keeps what it was given: the app role cannot change or delete a bill row.
+  assert.ok(await asAppIn(w.org.orgId, "UPDATE desk_sale_bills SET patient_name = 'Changed' WHERE bill_id = $1", [billId]));
+  assert.ok(await asAppIn(w.org.orgId, 'DELETE FROM desk_sale_bills WHERE bill_id = $1', [billId]));
+  assert.deepEqual((await billRows(w)).find((x) => x.billId === billId)!.patientName, 'Test Patient');
+});
+
+test('D-67 E-54 / E-55: each line as it stands now (taken, part returned, returned, short, rejected, cancelled), with the credit notes and their numbers; Retry shows on the next read', async () => {
+  const w = await stockWorld('dsnow');
+  const item = await retail(w, 'Toner');
+  await stock(w, item, 10, day(200));
+  on(w);
+  const billId = randomUUID();
+  const early = new Date(now().getTime() - 3_600_000).toISOString();
+  const s1 = await desk(deskSalesRoute, 'POST', SALES, { ...sale([
+    { lineKey: 'L1', itemId: item.id, qtyBase: 4 }, { lineKey: 'L2', itemId: item.id, qtyBase: 2 }, { lineKey: 'L3', itemId: item.id, qtyBase: 9 },
+    { lineKey: 'L4', itemId: randomUUID(), qtyBase: 1 }, { lineKey: 'L5', itemId: item.id, qtyBase: 50 }], billId), issuedAt: early, patientName: 'Test Patient', doctorName: 'Dr Test' });
+  assert.deepEqual(s1.body.lines.map((l: { status: string }) => l.status), ['posted', 'posted', 'short', 'rejected', 'short']);
+  const ret = (lines: { lineKey: string; qtyBase: number }[], serial?: string) =>
+    desk(deskReturnsRoute, 'POST', RETURNS, { creditNoteId: randomUUID(), billId, lines, ...(serial === undefined ? {} : { serial }) });
+  // CN/1 puts back 1 of L1 and all of L2.
+  assert.equal((await ret([{ lineKey: 'L1', qtyBase: 1 }, { lineKey: 'L2', qtyBase: 2 }], 'CN/2026-27/0001')).status, 200);
+  // An old desk's credit note (no serial) asks for 9 of L1: only the 3 still out come back.
+  const r2 = await ret([{ lineKey: 'L1', qtyBase: 9 }]);
+  assert.deepEqual(r2.body.lines, [{ lineKey: 'L1', status: 'returned', returnedBase: 3, reason: 'more_than_taken' }]);
+  // CN/3 credits L5, which never took stock: it is cancelled.
+  assert.equal((await ret([{ lineKey: 'L5', qtyBase: 50 }], 'CN/2026-27/0003')).status, 200);
+  // A newer bill, to see the order.
+  const newer = randomUUID();
+  await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'N1', itemId: item.id, qtyBase: 1 }], newer));
+
+  let log = await deskLog(w);
+  const ids = log.bills.map((b) => b.billId);
+  assert.ok(ids.indexOf(newer) < ids.indexOf(billId), 'newest bill first');
+  const bill = log.bills.find((b) => b.billId === billId)!;
+  assert.deepEqual([bill.billSerial, bill.issuedAt, bill.patientName, bill.doctorName], [`B-${billId.slice(0, 6)}`, early, 'Test Patient', 'Dr Test']);
+  const by = new Map(bill.lines.map((l) => [l.lineKey, l]));
+  assert.deepEqual(bill.lines.map((l) => l.lineKey), ['L1', 'L2', 'L3', 'L4', 'L5'], 'the whole bill, in line order');
+  assert.deepEqual([...by.values()].map((l) => [l.lineKey, l.state, l.returnedBase, l.reason]), [
+    ['L1', 'RETURNED', 4, null], ['L2', 'RETURNED', 2, null], ['L3', 'SHORT', 0, 'insufficient_stock'], ['L4', 'REJECTED', 0, 'unknown_item'], ['L5', 'CANCELLED', 0, 'credited']]);
+  assert.deepEqual(by.get('L1')!.credits.map((c) => [c.serial, c.returnedBase, c.status, c.reason]),
+    [['CN/2026-27/0001', 1, 'RETURNED', null], [null, 3, 'RETURNED', 'more_than_taken']], 'returnedBase counts what came back (4), not what was asked (10)');
+  assert.deepEqual(by.get('L5')!.credits.map((c) => [c.serial, c.returnedBase, c.status, c.reason]), [['CN/2026-27/0003', 0, 'NOTHING_TO_RETURN', 'not_posted']]);
+  assert.ok(by.get('L1')!.batches && by.get('L2')!.batches, 'the batches each took');
+  assert.deepEqual(log.items.filter((i) => i.billId === billId).map((i) => i.id), bill.lines.map((l) => l.id), 'items and bills carry the same lines');
+  // Retry: L3 takes its stock once more arrives; the next read says so (no stale row).
+  await stock(w, item, 20, day(300));
+  const g = await grant(w.owner, w.aa, 'stock.adjust', w.main.id);
+  const done = await w.owner.call(deskResolve, { params: { id: by.get('L3')!.id }, body: {}, headers: { 'reauth-grant': g } });
+  assert.deepEqual([done.status, done.body.state, done.body.patientName], [200, 'TAKEN', 'Test Patient']);
+  log = await deskLog(w);
+  assert.equal(log.bills.find((b) => b.billId === billId)!.lines.find((l) => l.lineKey === 'L3')!.state, 'TAKEN');
+  // A credit note for part of it: the next read shows it part returned.
+  await ret([{ lineKey: 'L3', qtyBase: 2 }], 'CN/2026-27/0004');
+  const l3 = (await deskLog(w)).bills.find((b) => b.billId === billId)!.lines.find((l) => l.lineKey === 'L3')!;
+  assert.deepEqual([l3.state, l3.returnedBase, l3.credits.map((c) => c.serial)], ['PART_RETURNED', 2, ['CN/2026-27/0004']]);
+  // The open view keeps whole bills too: only the rejected line is left to fix, under its bill.
+  const open = await deskLog(w, 'open');
+  assert.deepEqual(open.bills.find((b) => b.billId === billId)!.lines.map((l) => l.lineKey), ['L4']);
+  assert.ok(!open.bills.some((b) => b.billId === newer));
+});
+
+test('D-67: deskLineState, billsOf and optionalText', () => {
+  const st = (status: 'POSTED' | 'SHORT' | 'REJECTED' | 'CANCELLED', allocatedBase: number, returnedBase: number) => deskLineState({ status, allocatedBase, returnedBase });
+  assert.deepEqual([st('POSTED', 3, 0), st('POSTED', 3, 1), st('POSTED', 3, 2), st('POSTED', 3, 3), st('POSTED', 3, 4)], ['TAKEN', 'PART_RETURNED', 'PART_RETURNED', 'RETURNED', 'RETURNED']);
+  assert.deepEqual([st('SHORT', 0, 0), st('REJECTED', 0, 0), st('CANCELLED', 0, 0)], ['SHORT', 'REJECTED', 'CANCELLED']);
+  const l = (billId: string, lineKey: string) => ({ billId, lineKey, billSerial: billId, issuedAt: '2026-11-01T00:00:00.000Z', patientName: billId === 'a' ? 'P' : null,
+    patientRef: null, doctorName: null }) as unknown as DeskSaleView;
+  const g = billsOf([l('b', '1'), l('a', '1'), l('b', '2'), l('a', '2')]);
+  assert.deepEqual(g.map((b) => [b.billId, b.patientName, b.lines.map((x) => x.lineKey)]), [['b', null, ['1', '2']], ['a', 'P', ['1', '2']]]);
+  assert.deepEqual([optionalText(' a  b ', 10), optionalText('abcdef', 3), optionalText('ab \u0007', 10), optionalText('', 5), optionalText(' \n ', 5), optionalText(5, 5),
+    optionalText(null, 5), optionalText('😀😀😀', 2), optionalText('ab  cd', 3)], ['a b', 'abc', 'ab', null, null, null, null, '😀😀', 'ab']);
+});
+
+test('D-67 E-54: the credit-note number is stored as sent (trimmed, cut to 40), and a bad one is dropped, never a 422', async () => {
+  const w = await stockWorld('dscnserial');
+  const item = await retail(w, 'Mist');
+  await stock(w, item, 10, day(200));
+  on(w);
+  const billId = randomUUID();
+  await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 3 }, { lineKey: 'L2', itemId: item.id, qtyBase: 3 }, { lineKey: 'L3', itemId: item.id, qtyBase: 3 }], billId));
+  const cn = (lineKey: string, serial: unknown) => desk(deskReturnsRoute, 'POST', RETURNS, { creditNoteId: randomUUID(), billId, serial, lines: [{ lineKey, qtyBase: 1 }] });
+  for (const [k, v] of [['L1', '  CN/7  '], ['L2', 7], ['L3', 'C'.repeat(60)]] as const) {
+    const r = await cn(k, v);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+  }
+  const rows = await inOrg(w.org.orgId, async (c) => (await c.query('SELECT line_key, credit_note_serial FROM desk_return_lines ORDER BY line_key')).rows);
+  assert.deepEqual(rows, [{ line_key: 'L1', credit_note_serial: 'CN/7' }, { line_key: 'L2', credit_note_serial: null }, { line_key: 'L3', credit_note_serial: 'C'.repeat(40) }]);
+  const bad = await desk(deskReturnsRoute, 'POST', RETURNS, { creditNoteId: randomUUID(), billId, serial: 'CN/8', note: 'x', lines: [{ lineKey: 'L1', qtyBase: 1 }] });
+  assert.deepEqual([bad.status, bad.body.code], [422, 'UNKNOWN_FIELD']);
 });

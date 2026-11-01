@@ -177,14 +177,46 @@ export interface DeskSaleView {
   reason: string | null;
   resolvedAt: string | null;
   resolvedBy: string | null;
-  /** The batches the line took its stock from ("B043 ×2"), and how much was credited back. */
+  /** The batches the line took its stock from ("B043 ×2"), and how much credit notes put back (the stock, not what was asked). */
   batches: string | null;
   returnedBase: number;
+  /** D-67: each credit note that reached the line, oldest first; `serial` null when the desk did not send one (or before 031). */
+  credits: DeskCredit[];
+  /** D-67: what the line is now, from the stored status and what came back (deskLineState). */
+  state: DeskLineState;
+  /** D-67: the bill's patient and doctor when the desk sent them (desk_sale_bills); null otherwise. */
+  patientName: string | null;
+  patientRef: string | null;
+  doctorName: string | null;
   /**
    * D-66: what the line was exposed to when it was received (RX_FLAGS); recorded, never enforced.
    * Null: stored before migration 030 and never retried since, so never recorded.
    */
   rxFlags: string[] | null;
+}
+
+export interface DeskCredit { serial: string | null; returnedBase: number; status: 'RETURNED' | 'NOTHING_TO_RETURN'; reason: string | null; receivedAt: string }
+
+/**
+ * A line as it stands now (D-67), for the page: TAKEN (all its stock still out), PART_RETURNED (a credit note put
+ * some back), RETURNED (credit notes put all of it back), SHORT, REJECTED, CANCELLED (credited before it took any).
+ */
+export type DeskLineState = 'TAKEN' | 'PART_RETURNED' | 'RETURNED' | 'SHORT' | 'REJECTED' | 'CANCELLED';
+export function deskLineState(l: { status: DeskLineStatus; allocatedBase: number; returnedBase: number }): DeskLineState {
+  if (l.status !== 'POSTED') return l.status;
+  if (l.returnedBase <= 0) return 'TAKEN';
+  return l.returnedBase >= l.allocatedBase ? 'RETURNED' : 'PART_RETURNED';
+}
+
+/** D-67: one bill on Desk sales, its lines as they stand now. */
+export interface DeskBillView {
+  billId: string;
+  billSerial: string;
+  issuedAt: string;
+  patientName: string | null;
+  patientRef: string | null;
+  doctorName: string | null;
+  lines: DeskSaleView[];
 }
 
 const VIEW = `
@@ -195,14 +227,37 @@ const VIEW = `
          (SELECT string_agg(coalesce(bt.batch_no, '—') || ' ×' || a.qty_base, ', ' ORDER BY a.alloc_no)
             FROM desk_sale_allocations a LEFT JOIN batches bt ON bt.org_id = a.org_id AND bt.id = a.batch_id
            WHERE a.org_id = d.org_id AND a.sale_line_id = d.id) AS batches,
-         coalesce((SELECT sum(r.qty_base)::int FROM desk_return_lines r WHERE r.org_id = d.org_id AND r.sale_line_id = d.id), 0) AS "returnedBase",
-         d.rx_flags AS "rxFlags"
+         coalesce((SELECT sum(r.returned_base)::int FROM desk_return_lines r WHERE r.org_id = d.org_id AND r.sale_line_id = d.id), 0) AS "returnedBase",
+         (SELECT coalesce(jsonb_agg(jsonb_build_object('serial', r.credit_note_serial, 'returnedBase', r.returned_base, 'status', r.status,
+                                                       'reason', r.reason, 'receivedAt', r.received_at) ORDER BY r.received_at, r.id), '[]'::jsonb)
+            FROM desk_return_lines r WHERE r.org_id = d.org_id AND r.sale_line_id = d.id) AS credits,
+         d.rx_flags AS "rxFlags",
+         sb.patient_name AS "patientName", sb.patient_ref AS "patientRef", sb.doctor_name AS "doctorName"
     FROM desk_sale_lines d
     LEFT JOIN items i ON i.org_id = d.org_id AND i.id = d.item_id
     LEFT JOIN staff_users u ON u.org_id = d.org_id AND u.id = d.resolved_by
+    LEFT JOIN desk_sale_bills sb ON sb.org_id = d.org_id AND sb.bill_id = d.bill_id
    WHERE d.org_id = $1`;
-type Row = Omit<DeskSaleView, 'issuedAt' | 'receivedAt' | 'resolvedAt'> & { issuedAt: Date; receivedAt: Date; resolvedAt: Date | null };
-const view = (r: Row): DeskSaleView => ({ ...r, issuedAt: r.issuedAt.toISOString(), receivedAt: r.receivedAt.toISOString(), resolvedAt: r.resolvedAt?.toISOString() ?? null });
+type Row = Omit<DeskSaleView, 'issuedAt' | 'receivedAt' | 'resolvedAt' | 'state' | 'credits'> & { issuedAt: Date; receivedAt: Date; resolvedAt: Date | null;
+  credits: (Omit<DeskCredit, 'receivedAt'> & { receivedAt: string })[] };
+const view = (r: Row): DeskSaleView => ({
+  ...r, issuedAt: r.issuedAt.toISOString(), receivedAt: r.receivedAt.toISOString(), resolvedAt: r.resolvedAt?.toISOString() ?? null,
+  credits: r.credits.map((c) => ({ ...c, receivedAt: new Date(c.receivedAt).toISOString() })), state: deskLineState(r),
+});
+
+/** The lines grouped by bill, in the order given (newest bill first); the bill's fields are any line's (they are the same on each). */
+export function billsOf(lines: readonly DeskSaleView[]): DeskBillView[] {
+  const out = new Map<string, DeskBillView>();
+  for (const l of lines) {
+    let b = out.get(l.billId);
+    if (!b) {
+      b = { billId: l.billId, billSerial: l.billSerial, issuedAt: l.issuedAt, patientName: l.patientName, patientRef: l.patientRef, doctorName: l.doctorName, lines: [] };
+      out.set(l.billId, b);
+    }
+    b.lines.push(l);
+  }
+  return [...out.values()];
+}
 const notFound = () => new HttpError(404, 'DESK_SALE_NOT_FOUND', 'No such desk sale line.');
 
 const STATUS_FILTER: Record<string, string> = {
@@ -212,17 +267,29 @@ const STATUS_FILTER: Record<string, string> = {
   flagged: "AND d.rx_flags <> '{}'",
 };
 
-/** E-55: the desk's sale lines at the caller's premises: open ones (short or rejected) by default, `?status=all` for every line, `flagged` for lines with rx_flags. */
-export async function listDeskSales(s: Session, q: URLSearchParams): Promise<{ items: DeskSaleView[]; open: number }> {
+/** The most bills E-55 answers (D-67): whole bills, so a bill is never cut in half. */
+export const DESK_SALES_BILLS = 200;
+
+/**
+ * E-55: the desk's sale lines at the caller's premises: open ones (short or rejected) by default, `?status=all` for
+ * every line, `flagged` for lines with rx_flags. The newest DESK_SALES_BILLS bills that have a matching line, with
+ * every matching line of each (D-67), as `items` (lines) and `bills` (the same lines grouped by bill). Read fresh
+ * on each call: a Retry or a credit note shows on the next read.
+ */
+export async function listDeskSales(s: Session, q: URLSearchParams): Promise<{ items: DeskSaleView[]; bills: DeskBillView[]; open: number }> {
   const status = q.get('status') ?? 'open';
   if (!Object.hasOwn(STATUS_FILTER, status)) throw new HttpError(422, 'FIELD_INVALID', 'status is open, all or flagged.', { field: 'status', rule: 'enum' });
   const premises = s.premises.map((p) => p.id);
   return withTenant(s.orgId, async (db) => {
-    const rows = await db.rows<Row>(`${VIEW} AND d.premises_id = ANY($2::uuid[]) ${STATUS_FILTER[status]}
-                                     ORDER BY d.issued_at DESC, d.received_at DESC, d.line_key LIMIT 500`, [s.orgId, premises]);
+    const rows = await db.rows<Row>(
+      `${VIEW} AND d.premises_id = ANY($2::uuid[]) ${STATUS_FILTER[status]}
+          AND d.bill_id IN (SELECT d.bill_id FROM desk_sale_lines d WHERE d.org_id = $1 AND d.premises_id = ANY($2::uuid[]) ${STATUS_FILTER[status]}
+                             GROUP BY d.bill_id ORDER BY max(d.issued_at) DESC, d.bill_id LIMIT $3)
+        ORDER BY d.issued_at DESC, d.bill_id, d.received_at, d.line_key`, [s.orgId, premises, DESK_SALES_BILLS]);
     const open = (await db.rows<{ n: number }>(`SELECT count(*)::int AS n FROM desk_sale_lines WHERE org_id = $1 AND premises_id = ANY($2::uuid[]) AND status IN ('SHORT','REJECTED')`,
       [s.orgId, premises]))[0].n;
-    return { items: rows.map(view), open };
+    const items = rows.map(view);
+    return { items, bills: billsOf(items), open };
   });
 }
 

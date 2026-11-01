@@ -129,3 +129,32 @@ test('030 (D-66): a desk sale line stored before it has no rx_flags (NULL: never
   const flags = await inOrg(org.orgId, async (c) => (await c.query('SELECT line_key, rx_flags FROM desk_sale_lines ORDER BY line_key')).rows, u);
   assert.deepEqual(flags, [{ line_key: 'after', rx_flags: [] }, { line_key: 'before', rx_flags: null }]);
 });
+
+test('031 (D-67): a credit note stored before it keeps no number (NULL); a bill stored before it can gain its patient and doctor once, never twice', async () => {
+  const u = await freshDatabase({ migrate: false });
+  const at030 = runRunner({ MIGRATION_DATABASE_URL: u.migrator, MIGRATIONS_DIR: migrationsDir(30) });
+  assert.equal(at030.code, 0, at030.out);
+  const org = await createOrg('m031', { from: u });
+  const billId = (await inOrg(org.orgId, async (c) => {
+    const line = (await c.query(`INSERT INTO desk_sale_lines (org_id, premises_id, bill_id, line_key, bill_serial, issued_at,
+        requested_item_id, qty_base, status, allocated_base, short_base, reason, received_at)
+        VALUES ($1, $2, gen_random_uuid(), 'L1', 'OLD-1', now(), gen_random_uuid(), 1, 'REJECTED', 0, 0, 'unknown_item', now()) RETURNING id, bill_id`, [org.orgId, org.premisesId])).rows[0];
+    await c.query(`INSERT INTO desk_return_lines (org_id, premises_id, credit_note_id, bill_id, line_key, sale_line_id, qty_base, returned_base, status, reason, received_at)
+        VALUES ($1, $2, gen_random_uuid(), $3, 'L1', $4, 1, 0, 'NOTHING_TO_RETURN', 'not_posted', now())`, [org.orgId, org.premisesId, line.bill_id, line.id]);
+    return line.bill_id as string;
+  }, u));
+  const head = runRunner({ MIGRATION_DATABASE_URL: u.migrator, MIGRATIONS_DIR: REPO_MIGRATIONS });
+  assert.equal(head.code, 0, head.out);
+  const serials = await inOrg(org.orgId, async (c) => (await c.query('SELECT credit_note_serial FROM desk_return_lines')).rows, u);
+  assert.deepEqual(serials, [{ credit_note_serial: null }]);
+  const add = (name: string) => inOrg(org.orgId, (c) => c.query(`INSERT INTO desk_sale_bills (org_id, premises_id, bill_id, patient_name, received_at)
+      VALUES ($1, $2, $3, $4, now()) ON CONFLICT ON CONSTRAINT desk_sale_bills_key DO NOTHING`, [org.orgId, org.premisesId, billId, name]), u);
+  await add('Test Patient');
+  await add('Someone Else');
+  const party = await inOrg(org.orgId, async (c) => (await c.query('SELECT patient_name FROM desk_sale_bills')).rows, u);
+  assert.deepEqual(party, [{ patient_name: 'Test Patient' }]);
+  // A row that says nothing, or a name with a control character, is refused by the table itself.
+  const refused = (sql: string) => inOrg(org.orgId, (c) => c.query(sql, [org.orgId, org.premisesId]), u).then(() => 'ok', (e) => (e as { constraint?: string }).constraint);
+  assert.equal(await refused('INSERT INTO desk_sale_bills (org_id, premises_id, bill_id, received_at) VALUES ($1, $2, gen_random_uuid(), now())'), 'desk_sale_bills_some');
+  assert.equal(await refused("INSERT INTO desk_sale_bills (org_id, premises_id, bill_id, doctor_name, received_at) VALUES ($1, $2, gen_random_uuid(), E'Dr\\nX', now())"), 'desk_sale_bills_doctor_name');
+});

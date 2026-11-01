@@ -15,7 +15,9 @@ import type { DeskContext } from './route';
  * The pharmacy half of the desk ⇄ pharmacy stock sync (06a §9.3, §12.5; D-57):
  * - E-52 items: every active item, which the desk may put on a bill (D-66), with stock, the highest MRP, packs and flags;
  * - E-53 sales: an issued bill's lines take stock (FEFO), each line all or nothing, idempotent per (bill, line);
+ *   the bill's patient and doctor ride along when the desk has them (D-67: optional, stored once, never a gate);
  * - E-54 returns: a credit note's lines put back what the bill line took, never more, idempotent per (credit note, line).
+ *   The credit note's number rides along when the desk sends it (D-67).
  * Every movement names the "Ritu Desk" system actor. The organisation and premises are the env's.
  */
 
@@ -60,10 +62,11 @@ const LINE_KEY = /^[A-Za-z0-9_.:-]{1,64}$/;
 const MAX_LINES = 200;
 const MAX_QTY = 1_000_000;
 
-function object(v: unknown, at: string, keys: readonly string[]): Record<string, unknown> {
+/** `keys` are required; `optional` keys may be absent (D-67). Any other key is refused: 422 UNKNOWN_FIELD. */
+function object(v: unknown, at: string, keys: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) throw bad(at || 'body', 'object');
   for (const k of Object.keys(v)) {
-    if (!keys.includes(k)) throw new HttpError(422, 'UNKNOWN_FIELD', 'The request has a field this route does not accept.', { field: at ? `${at}.${k}` : k });
+    if (!keys.includes(k) && !optional.includes(k)) throw new HttpError(422, 'UNKNOWN_FIELD', 'The request has a field this route does not accept.', { field: at ? `${at}.${k}` : k });
   }
   for (const k of keys) if ((v as Record<string, unknown>)[k] === undefined) throw new HttpError(422, 'FIELD_REQUIRED', 'A required field is missing.', { field: at ? `${at}.${k}` : k });
   return v as Record<string, unknown>;
@@ -80,6 +83,21 @@ const qty = (v: unknown, field: string): number => {
   if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 1 || v > MAX_QTY) throw bad(field, 'int');
   return v;
 };
+/**
+ * An optional display text the desk may send (D-67): never a reason to refuse a request. Control characters
+ * become spaces, runs of spaces one, trimmed, cut to `max` characters; anything else (not a string, or nothing
+ * left) is null, as if the desk had not sent it.
+ */
+export function optionalText(v: unknown, max: number): string | null {
+  if (typeof v !== 'string') return null;
+  const t = [...v.replace(/\p{Cc}/gu, ' ').replace(/\s+/g, ' ').trim()].slice(0, max).join('').trim();
+  return t.length ? t : null;
+}
+/** An optional uuid the desk may send (D-67): lower-cased, or null when it is anything else. Never refuses. */
+export const optionalUuid = (v: unknown): string | null => (typeof v === 'string' && UUID_PATTERN.test(v) ? v.toLowerCase() : null);
+export const PARTY_NAME_MAX = 120;
+export const SERIAL_MAX = 40;
+
 function lines<T extends { lineKey: string }>(v: unknown, parse: (o: unknown, at: string) => T): T[] {
   if (!Array.isArray(v) || v.length === 0) throw bad('lines', 'required');
   if (v.length > MAX_LINES) throw bad('lines', 'max');
@@ -160,11 +178,14 @@ export async function deskItems(ctx: DeskContext): Promise<{ items: DeskItemView
 // ---------------------------------------------------------------- E-53 sales
 
 export interface SaleLineInput { lineKey: string; itemId: string; qtyBase: number }
-export interface SalesInput { billId: string; serial: string; issuedAt: Date; lines: SaleLineInput[] }
+/** D-67: who the bill was for and who prescribed, when the desk had them. Shown on Desk sales; never a gate. */
+export interface SaleParty { patientName: string | null; patientRef: string | null; doctorName: string | null }
+export interface SalesInput { billId: string; serial: string; issuedAt: Date; lines: SaleLineInput[]; party: SaleParty }
 export interface SaleLineResult { lineKey: string; status: 'posted' | 'short' | 'rejected' | 'cancelled'; allocatedBase: number; shortBase: number; reason: string | null }
 
+/** E-53's body. `patientName`, `patientId` and `doctorName` are optional (D-67): absent, null or not usable is null, never a 422. */
 export function parseSales(body: unknown): SalesInput {
-  const o = object(body, '', ['billId', 'serial', 'issuedAt', 'lines']);
+  const o = object(body, '', ['billId', 'serial', 'issuedAt', 'lines'], ['patientName', 'patientId', 'doctorName']);
   if (typeof o.serial !== 'string' || o.serial.trim().length < 1 || o.serial.trim().length > 40) throw bad('serial', 'length');
   const issuedAt = typeof o.issuedAt === 'string' ? new Date(o.issuedAt) : null;
   if (!issuedAt || Number.isNaN(issuedAt.getTime())) throw bad('issuedAt', 'format');
@@ -174,6 +195,7 @@ export function parseSales(body: unknown): SalesInput {
       const x = object(l, at, ['lineKey', 'itemId', 'qtyBase']);
       return { lineKey: lineKey(x.lineKey, `${at}.lineKey`), itemId: uuid(x.itemId, `${at}.itemId`), qtyBase: qty(x.qtyBase, `${at}.qtyBase`) };
     }),
+    party: { patientName: optionalText(o.patientName, PARTY_NAME_MAX), patientRef: optionalUuid(o.patientId), doctorName: optionalText(o.doctorName, PARTY_NAME_MAX) },
   };
 }
 
@@ -230,6 +252,15 @@ export async function postDeskSales(ctx: DeskContext, input: SalesInput): Promis
       }
       stored = await storedSales(db, ctx, input.billId, keys);
     }
+    // D-67: the bill's patient and doctor, the first time a sale for it carries any (a resend of a bill stored
+    // without them fills them then); never changed after. Nothing about them decides a line.
+    const p = input.party;
+    if (p.patientName !== null || p.patientRef !== null || p.doctorName !== null) {
+      await db.rows(
+        `INSERT INTO desk_sale_bills (org_id, premises_id, bill_id, patient_name, patient_ref, doctor_name, received_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT ON CONSTRAINT desk_sale_bills_key DO NOTHING`,
+        [ctx.orgId, ctx.premisesId, input.billId, p.patientName, p.patientRef, p.doctorName, now()]);
+    }
     return { lines: input.lines.map((l) => saleResult(stored.get(l.lineKey)!)) };
   });
 }
@@ -237,13 +268,14 @@ export async function postDeskSales(ctx: DeskContext, input: SalesInput): Promis
 // ---------------------------------------------------------------- E-54 returns
 
 export interface ReturnLineInput { lineKey: string; qtyBase: number }
-export interface ReturnsInput { creditNoteId: string; billId: string; lines: ReturnLineInput[] }
+/** `serial`: the credit note's number as the desk printed it, when it sends one (D-67); shown on Desk sales. */
+export interface ReturnsInput { creditNoteId: string; billId: string; serial: string | null; lines: ReturnLineInput[] }
 export interface ReturnLineResult { lineKey: string; status: 'returned' | 'nothing_to_return'; returnedBase: number; reason: string | null }
 
 export function parseReturns(body: unknown): ReturnsInput {
-  const o = object(body, '', ['creditNoteId', 'billId', 'lines']);
+  const o = object(body, '', ['creditNoteId', 'billId', 'lines'], ['serial']);
   return {
-    creditNoteId: uuid(o.creditNoteId, 'creditNoteId'), billId: uuid(o.billId, 'billId'),
+    creditNoteId: uuid(o.creditNoteId, 'creditNoteId'), billId: uuid(o.billId, 'billId'), serial: optionalText(o.serial, SERIAL_MAX),
     lines: lines(o.lines, (l, at) => {
       const x = object(l, at, ['lineKey', 'qtyBase']);
       return { lineKey: lineKey(x.lineKey, `${at}.lineKey`), qtyBase: qty(x.qtyBase, `${at}.qtyBase`) };
@@ -320,10 +352,11 @@ export async function postDeskReturns(ctx: DeskContext, input: ReturnsInput): Pr
         else [status, reason] = ['RETURNED', l.qtyBase > remaining ? 'more_than_taken' : null];
         const take = status === 'RETURNED' ? Math.min(l.qtyBase, remaining) : 0;
         const ins = await db.rows<{ id: string }>(
-          `INSERT INTO desk_return_lines (org_id, premises_id, credit_note_id, bill_id, line_key, sale_line_id, qty_base, returned_base, status, reason, received_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          `INSERT INTO desk_return_lines (org_id, premises_id, credit_note_id, bill_id, line_key, sale_line_id, qty_base, returned_base, status, reason, received_at,
+                                          credit_note_serial)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            ON CONFLICT ON CONSTRAINT desk_return_lines_key DO NOTHING RETURNING id`,
-          [ctx.orgId, ctx.premisesId, input.creditNoteId, input.billId, l.lineKey, sale?.id ?? null, l.qtyBase, take, status, reason, at]);
+          [ctx.orgId, ctx.premisesId, input.creditNoteId, input.billId, l.lineKey, sale?.id ?? null, l.qtyBase, take, status, reason, at, input.serial]);
         if (ins.length === 0) continue;
         // A credit for a line that never took stock closes it: it leaves the Desk sales list and can never be resolved.
         if (sale!.status === 'SHORT' || sale!.status === 'REJECTED') {
