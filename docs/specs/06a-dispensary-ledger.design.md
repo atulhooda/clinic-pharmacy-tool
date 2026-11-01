@@ -46,7 +46,8 @@
 - Clarified while building PR 8:
   - a draft's lines are a JSON array on the header until posting (the app role holds no DELETE, so line rows could not be removed); posting writes the immutable line rows and empties it. `received_at` and `posted_at` are set at posting, NULL in a draft (§6.7);
   - the app role holds UPDATE on `stock_balances.updated_at` alone, because `SELECT … FOR UPDATE` needs a column privilege; `on_hand` stays unwritable (§7.3, §9.1);
-  - E-24 shows a draft's posting checks (errors and warnings) before posting; the first error decides the status, and every error is in `details.problems` (§9.3);
+  - E-24 shows a draft's posting checks (errors and warnings) before posting; the first error decides the status, and every error is in `details.problems` (§9.3). Since 2026-10-31 (06 R12-1) the line rules are one pure module the server and the editor both run, and the draft view carries `checkContext` so the editor re-checks the screen as it is typed;
+  - posting keeps a medicine's manufacturer name and address on its item where the item and its master have none, never overwriting a value on file, audited `item.changed` (06 R12-2); E-12 and E-14 carry `manufacturerAddress`, and a delivery line starts with the item's values (06 R12-3);
   - E-45 serves its own print view (`format=print`, HTML) and CSV; the Stock page's statement is a screen over E-45 (§14);
   - Add an item lists every medicine in one dropdown: the organisation's own items first (picking one opens it, so nothing is added twice), then the master (§16);
   - DO-04's second half (an invoice posts again after a reversal) waits for reversals (PR 10).
@@ -1641,7 +1642,7 @@ It is emitted once per crossing, never per movement.
 | MR-01 | RMP | dispense, preview | `sale_type = PATIENT`; `patient_id` required, a patient of the organisation, not archived. No walk-in or anonymous sale, `RETAIL_PRODUCT` items included (06 OQ-10). | missing → 422 `PATIENT_REQUIRED`; `WALK_IN` → 409 `MODE_FORBIDS_OPERATION`; another tenant's or unknown → 404 `PATIENT_NOT_FOUND`; archived → 422 `PATIENT_ARCHIVED` | CHECK on `dispenses` |
 | MR-02 | RMP | dispense | the prescriber is an **active `INTERNAL`** prescriber of the organisation whose `registration_no` and `council` are set | 404 `PRESCRIBER_NOT_FOUND`; 422 `PRESCRIBER_NOT_INTERNAL`, `PRESCRIBER_REGISTRATION_MISSING` | CHECK `prescriber_kind_snapshot` |
 | MR-03 | RMP | post GRN | the supplier has ≥ 1 drug licence number on file | 422 `SUPPLIER_LICENCE_MISSING`. An expired licence is the warning `SUPPLIER_LICENCE_EXPIRED`, not a block. | — |
-| MR-04 | RMP | post GRN | every `MEDICINE`/`INJECTABLE` line resolves a manufacturer name **and address** (line → item → master), so the Schedule K purchase record is complete | 422 `MANUFACTURER_DETAILS_MISSING` | — |
+| MR-04 | RMP | post GRN | every `MEDICINE`/`INJECTABLE` line resolves a manufacturer name **and address** (line → item → master), so the Schedule K purchase record is complete. Posting keeps a line's values on an item with none on file (06 R12-2), so they are typed once per medicine | 422 `MANUFACTURER_DETAILS_MISSING` | — |
 | MR-05 | RMP | registers | the purchase register can be produced on demand, per premises, for any IST date range (§14) | — | — |
 | MR-06 | CONSUMABLES_ONLY | dispense, preview, patient return | no patient dispensing at this premises, even if another premises of the organisation dispenses | 409 `MODE_FORBIDS_OPERATION` | CHECK `mode_snapshot <> 'CONSUMABLES_ONLY'` |
 | MR-07 | CONSUMABLES_ONLY | GRN, procedure use, write-off, supplier return, adjustment, reversal, import | allowed; MR-03 and MR-04 do **not** apply (06 OQ-13) | — | — |
@@ -1901,7 +1902,7 @@ A change applies to bills issued after it; issued bills keep their snapshots.
 | E-11 | `GET /dispensary/master-corrections` | `stock.items` | the organisation's own requests only |
 | E-12 | `GET /dispensary/items?q=&category=&lowStock=&nearExpiry=&premisesId=` | `stock.view` | |
 | E-13 | `POST /dispensary/items` | `stock.items` | |
-| E-14 | `GET /dispensary/items/{id}` | `stock.view` | units, batches, balances per premises and location |
+| E-14 | `GET /dispensary/items/{id}` | `stock.view` | units, batches, balances per premises and location; `manufacturerName` and `manufacturerAddress` (item, else master; also on E-12, 06 R12-3) |
 | E-15 | `PATCH /dispensary/items/{id}` | `stock.items` | 409 `ITEM_IDENTITY_LOCKED` |
 | E-16 | `POST /dispensary/items/{id}/units` | `stock.items` | |
 | E-17 | `PATCH /dispensary/items/{id}/units/{unitId}` | `stock.items` | flags only; the factor is immutable |

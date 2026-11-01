@@ -7,6 +7,7 @@ import { writeAudit } from '../audit';
 import { withSessionTx, type Session } from '../auth/guard';
 import { inScope, requirePremises } from './scope';
 import { lockBalances, normaliseBatchNo, postMovements, resolveBatch, withStockTx, type MovementInput } from './ledger';
+import { lineProblems, needsManufacturer, parseExpiry, type Problem, type RuleContext } from './receipt-rules';
 
 /**
  * Receiving stock (06a §6.7, §9.3; E-23 … E-26). A delivery (GRN) is a DRAFT that anyone with
@@ -60,25 +61,7 @@ function uuid(v: unknown, field: string, nullable = false): string | null {
   return v.toLowerCase();
 }
 
-/** §11.3: `MM/YYYY` (or `MM/YY`) is the last day of that month; a full date is kept as is. */
-export function parseExpiry(text: string): { date: string; printed: string | null } | null {
-  const t = text.trim();
-  let m = /^(\d{1,2})\s*[/-]\s*(\d{4}|\d{2})$/.exec(t);
-  if (m) {
-    const month = Number(m[1]);
-    const year = m[2].length === 2 ? 2000 + Number(m[2]) : Number(m[2]);
-    if (month < 1 || month > 12 || year < 2000 || year > 2099) return null;
-    const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
-    return { date: `${year}-${String(month).padStart(2, '0')}-${String(last).padStart(2, '0')}`, printed: t };
-  }
-  m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
-  if (m) {
-    const d = new Date(`${t}T00:00:00Z`);
-    if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== t) return null;
-    return { date: t, printed: null };
-  }
-  return null;
-}
+export { parseExpiry };
 
 /** Validate a draft's lines (shape only; references are checked against the organisation separately). */
 export function parseLines(raw: unknown): DraftLine[] {
@@ -241,7 +224,7 @@ export async function patchGrn(s: Session, id: string, input: GrnInput): Promise
   });
 }
 
-export interface Problem { code: string; lineNo?: number }
+export type { Problem };
 
 /** Tests only (06b DL-19): skip a service pre-check so the database backstop is reached through the API. */
 export const faults = { skipExpiryPrecheck: false };
@@ -273,7 +256,7 @@ interface Context { items: Map<string, ItemInfo>; units: Map<string, UnitInfo>; 
  * §11.3), evaluated at the premises' rules as of today. Errors block; warnings are shown.
  */
 async function checks(db: Db, orgId: string, g: { id: string; premisesId: string; supplierId: string; invoiceNo: string; invoiceDate: string }, lines: readonly DraftLine[]):
-  Promise<{ errors: Problem[]; warnings: Problem[]; ctx: Context }> {
+  Promise<{ errors: Problem[]; warnings: Problem[]; ctx: Context; rules: RuleContext }> {
   const errors: Problem[] = [];
   const warnings: Problem[] = [];
   const today = todayIst();
@@ -293,48 +276,71 @@ async function checks(db: Db, orgId: string, g: { id: string; premisesId: string
   const dup = await db.rows(`SELECT 1 FROM goods_receipts WHERE org_id = $1 AND supplier_id = $2 AND lower(invoice_no) = lower($3) AND status = 'POSTED' AND id <> $4`,
     [orgId, g.supplierId, g.invoiceNo, g.id]);
   if (dup.length) errors.push({ code: 'DUPLICATE_INVOICE' });
+  const rules: RuleContext = { manufacturerRequired: rmp, today, nearExpiryBy: nearBy, skipExpiryPrecheck: faults.skipExpiryPrecheck };
+  // The line rules are receipt-rules.ts's (R12-1: the editor runs the same code); the database facts are found here.
   for (const [i, l] of lines.entries()) {
     const lineNo = i + 1;
     const item = items.get(l.itemId)!;
     const unit = units.get(l.purchaseUnitId)!;
-    if (!item.active) errors.push({ code: 'ITEM_INACTIVE', lineNo });
-    if (!unit.purchasable || !unit.active) errors.push({ code: 'UNIT_NOT_PURCHASABLE', lineNo });
-    if ((l.qty + l.freeQty) * unit.factor > 2_000_000_000) errors.push({ code: 'QTY_TOO_LARGE', lineNo });
-    if (l.discountPaise > l.qty * l.purchaseRatePaise) errors.push({ code: 'DISCOUNT_EXCEEDS_GROSS', lineNo });
-    if (item.trackBatches) {
-      const exp = l.expiry ? parseExpiry(l.expiry) : null;
-      if (!l.batchNo || !exp || !l.mrpPaise || !l.mrpUnitId) errors.push({ code: 'BATCH_DETAILS_REQUIRED', lineNo });
-      if (exp && exp.date < today && !faults.skipExpiryPrecheck) errors.push({ code: 'BATCH_EXPIRED', lineNo });
-      else if (exp && exp.date <= nearBy) warnings.push({ code: 'NEAR_EXPIRY_ON_ARRIVAL', lineNo });
-      const mfg = l.mfgDate ? parseExpiry(l.mfgDate) : null;
-      if (mfg && exp && mfg.date > exp.date) errors.push({ code: 'MFG_AFTER_EXPIRY', lineNo });
-      // OQ-15: an existing batch keeps its MRP (compared per base unit).
-      if (l.batchNo && exp && l.mrpPaise && l.mrpUnitId) {
-        const b = (await db.rows<{ mrp: number; factor: number }>(
-          `SELECT bt.mrp_paise AS mrp, u.base_units_per_unit AS factor FROM batches bt JOIN item_units u ON u.org_id = bt.org_id AND u.id = bt.mrp_unit_id
-            WHERE bt.org_id = $1 AND bt.premises_id = $2 AND bt.item_id = $3 AND bt.batch_no = $4 AND bt.expiry_date = $5`,
-          [orgId, g.premisesId, l.itemId, l.batchNo, exp.date]))[0];
-        if (b && b.mrp * units.get(l.mrpUnitId)!.factor !== l.mrpPaise * b.factor) errors.push({ code: 'BATCH_MRP_MISMATCH', lineNo });
-      }
-    } else if (l.batchNo || l.expiry) {
-      errors.push({ code: 'BATCH_NOT_TRACKED', lineNo });
+    let mrpMismatch = false;
+    const exp = item.trackBatches && l.expiry ? parseExpiry(l.expiry) : null;
+    // OQ-15: an existing batch keeps its MRP (compared per base unit).
+    if (item.trackBatches && l.batchNo && exp && l.mrpPaise && l.mrpUnitId) {
+      const b = (await db.rows<{ mrp: number; factor: number }>(
+        `SELECT bt.mrp_paise AS mrp, u.base_units_per_unit AS factor FROM batches bt JOIN item_units u ON u.org_id = bt.org_id AND u.id = bt.mrp_unit_id
+          WHERE bt.org_id = $1 AND bt.premises_id = $2 AND bt.item_id = $3 AND bt.batch_no = $4 AND bt.expiry_date = $5`,
+        [orgId, g.premisesId, l.itemId, l.batchNo, exp.date]))[0];
+      mrpMismatch = !!b && b.mrp * units.get(l.mrpUnitId)!.factor !== l.mrpPaise * b.factor;
     }
-    // MR-04: a medicine's purchase record names its manufacturer and their address (line → item → master).
-    if (rmp && (item.category === 'MEDICINE' || item.category === 'INJECTABLE')
-        && !((l.manufacturerName ?? item.mfrName) && (l.manufacturerAddress ?? item.mfrAddress))) {
-      errors.push({ code: 'MANUFACTURER_DETAILS_MISSING', lineNo });
-    }
-    // MR-08, MR-09: this premises' own licences, in date today.
-    if (item.flags.includes('NDPS') && !(ps.ndps && ps.ndpsTill && ps.ndpsTill >= today)) errors.push({ code: 'LICENCE_REQUIRED_NDPS', lineNo });
-    if (item.flags.includes('X') && !(ps.x && ps.xTill && ps.xTill >= today)) errors.push({ code: 'LICENCE_REQUIRED_SCHEDULE_X', lineNo });
+    const p = lineProblems(l, {
+      item, unit,
+      mrpMismatch,
+      // MR-08, MR-09: this premises' own licences, in date today.
+      ndpsBlocked: item.flags.includes('NDPS') && !(ps.ndps && ps.ndpsTill && ps.ndpsTill >= today),
+      xBlocked: item.flags.includes('X') && !(ps.x && ps.xTill && ps.xTill >= today),
+    }, rules);
+    errors.push(...p.errors.map((code) => ({ code, lineNo })));
+    warnings.push(...p.warnings.map((code) => ({ code, lineNo })));
   }
-  return { errors, warnings, ctx: { items, units, supplier } };
+  return { errors, warnings, ctx: { items, units, supplier }, rules };
 }
 
 /** The first error decides the status and code; every error is in `details.problems`. */
 function blocked(errors: Problem[]): HttpError {
   const first = errors[0];
   return new HttpError(STATUS[first.code] ?? 422, first.code, MESSAGES[first.code] ?? first.code, { problems: errors, lineNo: first.lineNo });
+}
+
+/**
+ * R12-2: a medicine's manufacturer, once on a posted bill, is kept on the item, so the next
+ * delivery of it needs nothing typed. Only a field with nothing on file (neither the item's own
+ * value nor its master's) is filled, from the first line of the item that has it; nothing on
+ * file is ever overwritten (the UPDATE re-checks under the row lock). Audited as an item change.
+ * Runs inside the post's transaction, after its checks: a refused post keeps nothing.
+ */
+async function keepManufacturers(db: Db, s: Session, lines: readonly DraftLine[], items: Map<string, ItemInfo>): Promise<void> {
+  const fill = new Map<string, { name: string | null; address: string | null }>();
+  for (const l of lines) {
+    const item = items.get(l.itemId)!;
+    if (!needsManufacturer(item.category)) continue;
+    const f = fill.get(l.itemId) ?? { name: null, address: null };
+    if (!item.mfrName && !f.name && l.manufacturerName) f.name = l.manufacturerName;
+    if (!item.mfrAddress && !f.address && l.manufacturerAddress) f.address = l.manufacturerAddress;
+    fill.set(l.itemId, f);
+  }
+  for (const [itemId, f] of fill) {
+    if (!f.name && !f.address) continue;
+    const r = (await db.rows<{ name: boolean; address: boolean }>(
+      `WITH cur AS (SELECT custom_manufacturer_name AS n, custom_manufacturer_address AS a FROM items WHERE org_id = $1 AND id = $2 FOR UPDATE)
+       UPDATE items i SET custom_manufacturer_name = coalesce(cur.n, $3), custom_manufacturer_address = coalesce(cur.a, $4), updated_at = $5
+         FROM cur WHERE i.org_id = $1 AND i.id = $2 AND ((cur.n IS NULL AND $3::text IS NOT NULL) OR (cur.a IS NULL AND $4::text IS NOT NULL))
+       RETURNING (cur.n IS NULL AND $3::text IS NOT NULL) AS name, (cur.a IS NULL AND $4::text IS NOT NULL) AS address`,
+      [s.orgId, itemId, f.name, f.address, now()]))[0];
+    if (!r) continue;
+    const fields = [...(r.name ? ['custom_manufacturer_name'] : []), ...(r.address ? ['custom_manufacturer_address'] : [])];
+    await writeAudit(db, { orgId: s.orgId, action: 'item.changed', actorLabel: s.name, actorRole: s.roleKey, staffUserId: s.staffUserId,
+      sessionId: s.sid, deviceId: s.deviceId, entityId: itemId, detail: { fields, reason: 'grn_posted' } });
+  }
 }
 
 /** E-25: post a draft. Locks, checks, resolves batches, writes lines and RECEIPTs, freezes the delivery. */
@@ -344,6 +350,7 @@ export async function postGrn(s: Session, id: string): Promise<{ id: string; war
     const lines = parseLines(g.draftLines);
     const { errors, warnings, ctx } = await checks(db, s.orgId, g, lines);
     if (errors.length) throw blocked(errors);
+    await keepManufacturers(db, s, lines, ctx.items);
     const at = now();
     const settings = (await db.rows<{ m: number }>('SELECT backdate_reason_after_minutes AS m FROM stock_settings WHERE org_id = $1', [s.orgId]))[0];
     await lockBalances(db, s.orgId, lines.map((l) => ({ itemId: l.itemId, locationId: g.locationId })));
@@ -433,6 +440,8 @@ export interface GrnView {
   totalPaise: number;
   /** For a draft: what posting would say now. */
   checks: { errors: Problem[]; warnings: Problem[] } | null;
+  /** For a draft: what the editor needs to re-run the line rules as the person types (R12-1); null if the checks could not run. */
+  checkContext: { manufacturerRequired: boolean; today: string; nearExpiryBy: string } | null;
 }
 
 /** GST on a pre-tax value, rounded half-up to the paisa (display only; the bill's own figures are on its lines). */
@@ -449,16 +458,18 @@ const HEADER = `SELECT g.id, g.status, g.premises_id AS "premisesId", g.location
 /** E-24 GET: a delivery with its lines; a draft also carries its checks. */
 export async function getGrn(s: Session, id: string): Promise<GrnView> {
   return withTenant(s.orgId, async (db) => {
-    const g = (await db.rows<Omit<GrnView, 'lines' | 'valuePaise' | 'gstPaise' | 'totalPaise' | 'checks'> & { draftLines: unknown }>(
+    const g = (await db.rows<Omit<GrnView, 'lines' | 'valuePaise' | 'gstPaise' | 'totalPaise' | 'checks' | 'checkContext'> & { draftLines: unknown }>(
       `${HEADER} WHERE g.org_id = $1 AND g.id = $2`, [s.orgId, id, todayIst()]))[0];
     if (!g || !inScope(s, g.premisesId)) throw notFound();
     let raw: (DraftLine & { batchId: string | null; baseUnitsPerUnit?: number })[];
     let problems: GrnView['checks'] = null;
+    let checkContext: GrnView['checkContext'] = null;
     if (g.status === 'DRAFT') {
       raw = parseLines(g.draftLines).map((l) => ({ ...l, batchId: null }));
       try {
         const c = await checks(db, s.orgId, g, raw);
         problems = { errors: c.errors, warnings: c.warnings };
+        checkContext = { manufacturerRequired: c.rules.manufacturerRequired, today: c.rules.today, nearExpiryBy: c.rules.nearExpiryBy };
       } catch (err) {
         // A reference that no longer resolves (e.g. a unit made inactive is still fine; a removed one cannot be) shows as one error.
         if (!(err instanceof HttpError)) throw err;
@@ -488,7 +499,7 @@ export async function getGrn(s: Session, id: string): Promise<GrnView> {
     void draftLines;
     const valuePaise = lines.reduce((n, l) => n + l.valuePaise, 0);
     const gstPaise = lines.reduce((n, l) => n + l.gstPaise, 0);
-    return { ...head, lines, valuePaise, gstPaise, totalPaise: valuePaise + gstPaise, checks: problems };
+    return { ...head, lines, valuePaise, gstPaise, totalPaise: valuePaise + gstPaise, checks: problems, checkContext };
   });
 }
 

@@ -120,12 +120,14 @@ test('DM-04 / DM-05 / DM-06 / D-65: at an RMP premises a supplier with no licenc
     const r2 = await postIt(w.reception, (await draft(w, w.reception, lapsed, [pcmLine(w)])).body.id);
     assert.equal(r2.status, 200);
     assert.deepEqual(r2.body.warnings, [{ code: 'SUPPLIER_LICENCE_EXPIRED' }]);
-    // DM-06: a custom medicine with no manufacturer address anywhere.
-    const noMfr = pcmLine(w, { manufacturerName: null, manufacturerAddress: null, batchNo: 'NOMFR' });
+    // DM-06: a custom medicine with no manufacturer address anywhere. (Not pcm: the posts above kept their maker on it, R12-2.)
+    const bare = await createItem(w.owner, { category: 'MEDICINE', displayName: 'Custom without maker dm4', baseUnit: 'TABLET' });
+    const bareLine = (extra: Record<string, unknown>) => ({ itemId: bare.id, purchaseUnitId: bare.baseUnitId, qty: 10, expiry: '06/2027', mrpPaise: 100, mrpUnitId: bare.baseUnitId, purchaseRatePaise: 50, ...MFR, ...extra });
+    const noMfr = bareLine({ manufacturerName: null, manufacturerAddress: null, batchNo: 'NOMFR' });
     const r3 = await postIt(w.reception, (await draft(w, w.reception, lic, [noMfr])).body.id);
     assert.deepEqual([r3.status, r3.body.code, r3.body.details.lineNo], [422, 'MANUFACTURER_DETAILS_MISSING', 1]);
     // A name without an address is not enough either (the bills print a maker's short name only).
-    const nameOnly = pcmLine(w, { manufacturerAddress: null, batchNo: 'NAMEONLY' });
+    const nameOnly = bareLine({ manufacturerAddress: null, batchNo: 'NAMEONLY' });
     const r3b = await postIt(w.reception, (await draft(w, w.reception, lic, [nameOnly])).body.id);
     assert.deepEqual([r3b.status, r3b.body.code], [422, 'MANUFACTURER_DETAILS_MISSING']);
     // The item's own details count; so do a master row's (line → item → master).
