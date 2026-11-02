@@ -3,15 +3,20 @@
 // database, with synthetic organisations, items and bills only.
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
+import { readFileSync } from 'fs';
+import path from 'path';
 import { batch, createItem, grant, post, snapshot, stockWorld, asAppIn, type Item, type StockWorld } from './harness/stock';
-import { createOrg, inOrg } from './harness/fixtures';
+import { createOrg, createStaff, inOrg } from './harness/fixtures';
 import { as } from './harness/env';
-import { call, signIn } from './harness/http';
+import { Browser, call, signIn } from './harness/http';
 import { now, setClockForTests } from '../lib/clock';
 import { setQueryListener, wrap } from '../lib/db/db';
 import { verifySchema } from '../lib/db/selfcheck';
 import { signDeskRequest } from '../lib/integrations/desk/signature';
+import { optionalText, parseReturns, parseSales } from '../lib/integrations/desk/sync';
+import { billsOf, canSeePatients, deskLineState, rxFlagsOf, type DeskSaleView } from '../lib/stock/desk-sales';
+import { deskBillParty } from '../lib/stock/display';
 import { GET as deskItemsRoute } from '../app/api/integrations/desk/items/route';
 import { POST as deskSalesRoute } from '../app/api/integrations/desk/sales/route';
 import { POST as deskReturnsRoute } from '../app/api/integrations/desk/returns/route';
@@ -158,28 +163,108 @@ test('D-57: the organisation and premises come only from the env: a body cannot 
 
 // ---------------------------------------------------------------- E-52
 
-test('E-52 / D-59: only active retail products and medicines given to patients, with on-hand, dispensable and the highest MRP per base unit (rounded up)', async () => {
+test('E-52 / D-66: every active item, any category or use, with on-hand, dispensable, the highest MRP per base unit (rounded up) and the feed rev 2 fields', async () => {
   const w = await stockWorld('dsitems');
   const cream = await retail(w, 'Cream');
   const both = await retail(w, 'Shampoo', { useFor: 'BOTH' });
   const clinicOnly = await retail(w, 'Peel', { useFor: 'IN_CLINIC' });
   const removed = await retail(w, 'Old soap');
   await w.owner.call((await import('../app/api/dispensary/items/[id]/route')).PATCH, { method: 'PATCH', params: { id: removed.id }, body: { active: false } });
+  const inj = await createItem(w.owner, { category: 'INJECTABLE', displayName: `Ceftriaxone ${randomUUID().slice(0, 4)}`, baseUnit: 'VIAL' });
+  // Packs: base first, then by size; a pack not dispensable or no longer active is not offered.
+  const units = (await import('../app/api/dispensary/items/[id]/units/route')).POST;
+  const unit = (await import('../app/api/dispensary/items/[id]/units/[unitId]/route')).PATCH;
+  const addUnit = async (name: string, factor: number) => (await w.owner.call(units, { body: { name, baseUnitsPerUnit: factor }, params: { id: cream.id } })).body.id as string;
+  await addUnit('pair', 2);
+  const bulk = await addUnit('bulk', 5);
+  const tray = await addUnit('tray', 20);
+  assert.equal((await w.owner.call(unit, { method: 'PATCH', params: { id: cream.id, unitId: bulk }, body: { dispensable: false } })).status, 200);
+  assert.equal((await w.owner.call(unit, { method: 'PATCH', params: { id: cream.id, unitId: tray }, body: { active: false } })).status, 200);
+  // Schedules are master ∪ extra in H, H1, X, G, NDPS, H2 order; the item's HSN overrides the master's.
+  const masterOf = (flags: string[], hsn: string | null) => as('curator', async (c) => (await c.query(
+    `INSERT INTO medicine_master (brand_name, manufacturer_name, dosage_form, suggested_base_unit, salts, source, source_ref, schedule_flags, hsn_code)
+     VALUES ($1, 'Synthetic Maker', 'TABLET', 'TABLET', '[{"name":"synthetic"}]', 'test', $2, $3, $4) RETURNING id`,
+    [`Synthetic ${randomUUID().slice(0, 6)} tablet`, `ds-${randomUUID()}`, flags, hsn])).rows[0].id as string);
+  const sched = await createItem(w.owner, { masterId: await masterOf(['NDPS', 'H', 'G'], '3004'), category: 'MEDICINE', displayName: `Sched ${randomUUID().slice(0, 4)}`,
+    baseUnit: 'TABLET', extraScheduleFlags: ['X', 'H1', 'H'] });
+  const override = await createItem(w.owner, { masterId: await masterOf([], '3004'), category: 'MEDICINE', displayName: `Ovr ${randomUUID().slice(0, 4)}`,
+    baseUnit: 'TABLET', hsnCodeOverride: '30049099' });
   // Box of 10: 1005 paise a box is 100.5 a piece → 101; 900 a box → 90. Quarantined and placeholder stock count on hand only.
   await stock(w, cream, 7, day(100), { mrpPaise: 1005 });
   await stock(w, cream, 5, day(300), { mrpPaise: 900 });
   await stock(w, cream, 4, day(200), { mrpPaise: 5000, locationId: w.main.quarantine });
   await placeholder(w, cream, 3);
+  await post(w, [{ type: 'OPENING_BALANCE', itemId: w.glv.id, batchId: null, qtyDelta: 40 }]);
   on(w);
   const r = await desk(deskItemsRoute, 'GET', ITEMS);
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  const ids = (r.body.items as { id: string }[]).map((i) => i.id);
-  assert.ok(ids.includes(cream.id) && ids.includes(both.id) && ids.includes(w.pcm.id), 'retail products and medicines (D-59)');
-  assert.ok(!ids.includes(clinicOnly.id) && !ids.includes(removed.id) && !ids.includes(w.glv.id), 'given to patients, active, never a consumable');
-  const c = r.body.items.find((i: { id: string }) => i.id === cream.id);
+  const byId = new Map((r.body.items as Record<string, unknown>[]).map((i) => [i.id as string, i]));
+  for (const [it, what] of [[cream, 'a retail product'], [both, 'a BOTH item'], [clinicOnly, 'an item used in the clinic'], [w.pcm, 'a medicine'],
+    [w.glv, 'an untracked consumable'], [inj, 'an injectable'], [sched, 'a scheduled medicine']] as const) {
+    assert.ok(byId.has(it.id), `${what} is listed (D-66)`);
+  }
+  assert.ok(!byId.has(removed.id), 'a removed item is still left out');
+  const c = byId.get(cream.id)!;
   assert.deepEqual({ onHand: c.onHandBase, dispensable: c.dispensableBase, maxMrp: c.maxMrpPaisePerBase, category: c.category, baseUnit: c.baseUnit, active: c.active },
     { onHand: 19, dispensable: 12, maxMrp: 101, category: 'RETAIL_PRODUCT', baseUnit: 'PIECE', active: true });
-  assert.equal(r.body.items.find((i: { id: string }) => i.id === both.id).maxMrpPaisePerBase, null, 'no stock: no MRP');
+  assert.equal(byId.get(both.id)!.maxMrpPaisePerBase, null, 'no stock: no MRP');
+  assert.deepEqual([...[cream, both, clinicOnly, w.pcm, w.glv, inj].map((i) => byId.get(i.id)!.useFor)],
+    ['PATIENTS', 'BOTH', 'IN_CLINIC', 'PATIENTS', 'IN_CLINIC', 'IN_CLINIC'], 'useFor resolved with the category default (D-54), never null');
+  assert.deepEqual(c.units, [{ name: 'piece', baseQty: 1 }, { name: 'pair', baseQty: 2 }, { name: 'box', baseQty: 10 }]);
+  assert.deepEqual(byId.get(inj.id)!.units, [{ name: 'vial', baseQty: 1 }]);
+  const g = byId.get(w.glv.id)!;
+  assert.deepEqual([g.trackBatches, g.dispensableBase, g.maxMrpPaisePerBase], [false, 40, null], 'untracked: its store balance is dispensable, and it has no MRP');
+  const sc = byId.get(sched.id)!;
+  assert.deepEqual([sc.schedules, sc.requiresPrescription, sc.hsn], [['H', 'H1', 'X', 'G', 'NDPS'], true, '3004'], 'master ∪ extra, each once, in canonical order (not alphabetical); Schedule X imposes Rx');
+  assert.deepEqual([byId.get(override.id)!.hsn, byId.get(override.id)!.schedules, c.hsn, c.schedules], ['30049099', [], null, []], 'the override wins');
+});
+
+// ---------------------------------------------------------------- the shared contract fixture (D-66)
+
+// The same file, byte for byte, is the desk's scripts/fixtures/desk-sync-contract.json; the desk's test pins the same hash.
+const FIXTURE = path.join(process.cwd(), 'test', 'fixtures', 'desk-sync-contract.json');
+const CONTRACT_FIXTURE_SHA256 = 'b51fc005a77f651aa922cd7dad2dab1b36b778f7e56e4cbd81dfa5e06ffa3a17';
+const contract = JSON.parse(readFileSync(FIXTURE, 'utf8'));
+const jsonType = (v: unknown) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
+
+test('D-66 contract: the fixture is the agreed one, and every real E-52 row has the shape of the fixture\'s rev 2 items', async () => {
+  assert.equal(createHash('sha256').update(readFileSync(FIXTURE)).digest('hex'), CONTRACT_FIXTURE_SHA256);
+  const shape = contract.feed.items.slice(0, 5) as Record<string, unknown>[];
+  const keys = Object.keys(shape[0]).sort();
+  for (const f of shape) assert.deepEqual(Object.keys(f).sort(), keys, 'fixture items 0–4 share one key set');
+  const types = new Map(keys.map((k) => [k, new Set(shape.map((f) => jsonType(f[k])))]));
+  const w = await stockWorld('dscontract');
+  const inj = await createItem(w.owner, { category: 'INJECTABLE', displayName: `Inj ${randomUUID().slice(0, 4)}`, baseUnit: 'VIAL', extraScheduleFlags: ['H'], requiresPrescription: true,
+    hsnCodeOverride: '30042019' });
+  await stock(w, inj, 3, day(200));
+  await post(w, [{ type: 'OPENING_BALANCE', itemId: w.glv.id, batchId: null, qtyDelta: 5 }]);
+  on(w);
+  const rows = (await desk(deskItemsRoute, 'GET', ITEMS)).body.items as Record<string, unknown>[];
+  assert.ok(rows.length >= 3);
+  for (const row of rows) {
+    assert.deepEqual(Object.keys(row).sort(), keys, `${row.displayName}: the key set`);
+    for (const k of keys) assert.ok(types.get(k)!.has(jsonType(row[k])), `${row.displayName}.${k}: ${jsonType(row[k])} is one of ${[...types.get(k)!]}`);
+    for (const u of row.units as Record<string, unknown>[]) assert.deepEqual([Object.keys(u).sort(), typeof u.name, Number.isInteger(u.baseQty)], [['baseQty', 'name'], 'string', true]);
+  }
+  // The fixture's sale and return parse as E-53 and E-54 bodies; real answers have the fixture answers' keys.
+  const parsed = parseSales(contract.sale);
+  assert.deepEqual(parsed.lines, contract.sale.lines);
+  assert.equal(parsed.issuedAt.toISOString(), contract.sale.issuedAt);
+  assert.deepEqual(parseReturns(contract.return).lines, contract.return.lines);
+  // D-67: the optional fields, both ways: the old bodies carry none; the new ones parse to exactly them, and nothing else changes.
+  assert.deepEqual(parseSales(contract.sale).party, { patientName: null, patientRef: null, doctorName: null });
+  const withParty = parseSales(contract.saleWithParty);
+  assert.deepEqual(withParty.party, { patientName: contract.saleWithParty.patientName, patientRef: contract.saleWithParty.patientId, doctorName: contract.saleWithParty.doctorName });
+  assert.deepEqual({ ...withParty, party: null }, { ...parsed, party: null });
+  const { patientName: _n, patientId: _i, doctorName: _d, ...stripped } = contract.saleWithParty;
+  assert.deepEqual(stripped, contract.sale, 'saleWithParty is sale plus the three optional fields');
+  assert.equal(parseReturns(contract.return).serial, null);
+  assert.equal(parseReturns(contract.returnWithSerial).serial, contract.returnWithSerial.serial);
+  const { serial: _s, ...plainReturn } = contract.returnWithSerial;
+  assert.deepEqual(plainReturn, contract.return, 'returnWithSerial is return plus serial');
+  const s = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'l1', itemId: inj.id, qtyBase: 1 }, { lineKey: 'l2', itemId: w.glv.id, qtyBase: 1 }]));
+  for (const l of s.body.lines) assert.deepEqual(Object.keys(l).sort(), Object.keys(contract.saleAnswerNew.lines[0]).sort());
+  assert.deepEqual(s.body.lines.map((l: { status: string }) => l.status), ['posted', 'posted'], 'the injectable and the consumable both take stock now (saleAnswerNew, not saleAnswerOld)');
 });
 
 // ---------------------------------------------------------------- E-53
@@ -247,25 +332,160 @@ test('E-53: expired, quarantined and placeholder stock is never taken; a short l
   assert.deepEqual((await movements(w, item.id)).map((m) => [m.batchId, m.qty]), [[real, -2]], 'only the real, unexpired store batch');
 });
 
-test('E-53 / D-59: a medicine sells like a retail product; a consumable, an item used in clinic, or one not in this pharmacy is rejected and moves nothing', async () => {
+test('E-53 / D-66: any active item sells: a consumable, an item used in the clinic, an H1 injectable and a Schedule X medicine take stock; only unknown and removed items are refused', async () => {
   const w = await stockWorld('dsrej');
   const peel = await retail(w, 'Peel', { useFor: 'IN_CLINIC' });
   await stock(w, peel, 10, day(200));
+  const cream = await retail(w, 'Cream');
+  await stock(w, cream, 10, day(200));
+  const removed = await retail(w, 'Old soap');
+  await stock(w, removed, 10, day(200));
+  await w.owner.call((await import('../app/api/dispensary/items/[id]/route')).PATCH, { method: 'PATCH', params: { id: removed.id }, body: { active: false } });
+  const inj = await createItem(w.owner, { category: 'INJECTABLE', displayName: `Inj H1 ${randomUUID().slice(0, 4)}`, baseUnit: 'VIAL', extraScheduleFlags: ['H1'], requiresPrescription: true });
+  await stock(w, inj, 5, day(200));
+  const xMed = await createItem(w.owner, { category: 'MEDICINE', displayName: `X med ${randomUUID().slice(0, 4)}`, baseUnit: 'TABLET', extraScheduleFlags: ['X'] });
+  await stock(w, xMed, 10, day(200));
   const pcmBatch = await batch(w, { expiry: day(200) });
   await post(w, [{ type: 'OPENING_BALANCE', batchId: pcmBatch, qtyDelta: 30 }]);
   await post(w, [{ type: 'OPENING_BALANCE', itemId: w.glv.id, batchId: null, qtyDelta: 100 }]);
   on(w);
+  const billId = randomUUID();
   const r = await desk(deskSalesRoute, 'POST', SALES, sale([
-    { lineKey: 'med', itemId: w.pcm.id, qtyBase: 1 }, { lineKey: 'gloves', itemId: w.glv.id, qtyBase: 1 }, { lineKey: 'peel', itemId: peel.id, qtyBase: 1 },
-    { lineKey: 'ghost', itemId: randomUUID(), qtyBase: 1 }]));
+    { lineKey: 'med', itemId: w.pcm.id, qtyBase: 1 }, { lineKey: 'gloves', itemId: w.glv.id, qtyBase: 3 }, { lineKey: 'peel', itemId: peel.id, qtyBase: 1 },
+    { lineKey: 'inj', itemId: inj.id, qtyBase: 2 }, { lineKey: 'x', itemId: xMed.id, qtyBase: 4 }, { lineKey: 'cream', itemId: cream.id, qtyBase: 1 },
+    { lineKey: 'injshort', itemId: inj.id, qtyBase: 99 }, { lineKey: 'ghost', itemId: randomUUID(), qtyBase: 1 }, { lineKey: 'gone', itemId: removed.id, qtyBase: 1 }], billId));
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(r.body.lines.map((l: { status: string; reason?: string }) => [l.status, l.reason ?? null]),
-    [['posted', null], ['rejected', 'not_retail_product'], ['rejected', 'not_for_patients'], ['rejected', 'unknown_item']]);
+  assert.deepEqual(r.body.lines.map((l: { lineKey: string; status: string; reason?: string }) => [l.lineKey, l.status, l.reason ?? null]), [
+    ['med', 'posted', null], ['gloves', 'posted', null], ['peel', 'posted', null], ['inj', 'posted', null], ['x', 'posted', null], ['cream', 'posted', null],
+    ['injshort', 'short', 'insufficient_stock'], ['ghost', 'rejected', 'unknown_item'], ['gone', 'rejected', 'item_inactive']]);
   assert.deepEqual((await movements(w, w.pcm.id)).map((m) => [m.batchId, m.qty]), [[pcmBatch, -1]], 'the medicine moved, by FEFO');
-  assert.equal((await movements(w, w.glv.id)).length + (await movements(w, peel.id)).length, 0);
+  assert.deepEqual((await movements(w, w.glv.id)).map((m) => [m.batchId, m.qty]), [[null, -3]], 'the untracked consumable moved');
+  assert.deepEqual([(await movements(w, peel.id)).map((m) => m.qty), (await movements(w, inj.id)).map((m) => m.qty), (await movements(w, xMed.id)).map((m) => m.qty)],
+    [[-1], [-2], [-4]], 'the in-clinic item, the injectable and the Schedule X medicine moved');
+  assert.equal((await movements(w, removed.id)).length, 0, 'a removed item moves nothing');
+  // D-66: each line records what it was exposed to, short and rejected lines too; never a gate.
+  const flags = new Map((await inOrg(w.org.orgId, async (c) => (await c.query(
+    'SELECT line_key, rx_flags FROM desk_sale_lines WHERE bill_id = $1', [billId])).rows)).map((x: { line_key: string; rx_flags: string[] }) => [x.line_key, x.rx_flags]));
+  assert.deepEqual(Object.fromEntries(flags), {
+    med: [], gloves: ['consumable', 'in_clinic_item'], peel: ['in_clinic_item'],
+    inj: ['requires_prescription', 'schedule_h1', 'injectable', 'in_clinic_item'], x: ['requires_prescription', 'schedule_x'],
+    cream: [], injshort: ['requires_prescription', 'schedule_h1', 'injectable', 'in_clinic_item'], ghost: [], gone: [],
+  });
+  // E-55 shows them, and `flagged` lists only the flagged lines.
+  const all = (await w.owner.call(deskSalesList, { path: '/api/dispensary/desk-sales?status=all' })).body.items as { lineKey: string; rxFlags: string[] }[];
+  assert.deepEqual(all.find((i) => i.lineKey === 'x')!.rxFlags, ['requires_prescription', 'schedule_x']);
+  const flagged = await w.owner.call(deskSalesList, { path: '/api/dispensary/desk-sales?status=flagged' });
+  assert.equal(flagged.status, 200, JSON.stringify(flagged.body));
+  assert.deepEqual((flagged.body.items as { lineKey: string }[]).map((i) => i.lineKey).sort(), ['gloves', 'inj', 'injshort', 'peel', 'x']);
+  assert.equal((await w.owner.call(deskSalesList, { path: '/api/dispensary/desk-sales?status=nope' })).status, 422);
   const bad = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'a', itemId: peel.id, qtyBase: 1 }, { lineKey: 'a', itemId: peel.id, qtyBase: 1 }]));
   assert.deepEqual([bad.status, bad.body.code], [422, 'DUPLICATE_LINE_KEY']);
   assert.equal((await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'a', itemId: peel.id, qtyBase: 0 }]))).status, 422);
+});
+
+test('D-66: rxFlagsOf lists the flags in RX_FLAGS order, and an unknown item has none', () => {
+  const item = (o: Partial<Parameters<typeof rxFlagsOf>[0] & object>) => ({ id: 'x', category: 'MEDICINE', useFor: 'PATIENTS', active: true, requiresPrescription: false, schedules: [], ...o });
+  assert.deepEqual(rxFlagsOf(undefined), []);
+  assert.deepEqual(rxFlagsOf(item({ category: 'RETAIL_PRODUCT' })), []);
+  assert.deepEqual(rxFlagsOf(item({ requiresPrescription: true, schedules: ['H', 'H1', 'X', 'G', 'NDPS', 'H2'] })),
+    ['requires_prescription', 'schedule_h', 'schedule_h1', 'schedule_x', 'schedule_g', 'schedule_h2', 'ndps']);
+  assert.deepEqual(rxFlagsOf(item({ category: 'INJECTABLE', useFor: 'IN_CLINIC', schedules: ['NDPS'] })), ['ndps', 'injectable', 'in_clinic_item']);
+  assert.deepEqual(rxFlagsOf(item({ category: 'CONSUMABLE', useFor: 'BOTH' })), ['consumable']);
+  assert.deepEqual(rxFlagsOf(item({ active: false, useFor: 'IN_CLINIC' })), ['in_clinic_item'], 'an inactive item keeps its flags (the line is rejected anyway)');
+});
+
+test('R11-5 / D-66: the feed\'s dispensableBase is exactly what a sale can take, for an untracked item and for a tracked one with expired and placeholder stock', async () => {
+  const w = await stockWorld('dsr115');
+  await post(w, [{ type: 'OPENING_BALANCE', itemId: w.glv.id, batchId: null, qtyDelta: 60 }]);
+  const gel = await retail(w, 'Gel');
+  await stock(w, gel, 7, day(200));
+  const expired = await stock(w, gel, 9, day(100));
+  const { asOwnerIn } = await import('./harness/stock');
+  assert.equal(await asOwnerIn(w.org.orgId, 'UPDATE batches SET expiry_date = $2 WHERE org_id = $1 AND id = $3', [w.org.orgId, day(-1), expired]), null);
+  await placeholder(w, gel, 4);
+  on(w);
+  const feed = new Map(((await desk(deskItemsRoute, 'GET', ITEMS)).body.items as { id: string; dispensableBase: number }[]).map((i) => [i.id, i.dispensableBase]));
+  assert.deepEqual([feed.get(w.glv.id), feed.get(gel.id)], [60, 7]);
+  for (const [it, n] of [[w.glv, 60], [gel, 7]] as const) {
+    const over = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'k', itemId: it.id, qtyBase: n + 1 }]));
+    assert.deepEqual([over.body.lines[0].status, over.body.lines[0].shortBase], ['short', 1], `${n + 1} is one more than the feed said`);
+    const exact = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'k', itemId: it.id, qtyBase: n }]));
+    assert.equal(exact.body.lines[0].status, 'posted', `${n} is what the feed said`);
+  }
+  const after = new Map(((await desk(deskItemsRoute, 'GET', ITEMS)).body.items as { id: string; dispensableBase: number }[]).map((i) => [i.id, i.dispensableBase]));
+  assert.deepEqual([after.get(w.glv.id), after.get(gel.id)], [0, 0]);
+});
+
+test('D-66 / migration 030: rx_flags never changes once recorded (the guard, during a resolve too, for the owner and the app role), and holds only known flags', async () => {
+  const w = await stockWorld('dsrxguard');
+  const inj = await createItem(w.owner, { category: 'INJECTABLE', displayName: `Inj ${randomUUID().slice(0, 4)}`, baseUnit: 'VIAL' });
+  on(w);
+  const billId = randomUUID();
+  const r = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'L1', itemId: inj.id, qtyBase: 2 }], billId));
+  assert.equal(r.body.lines[0].status, 'short');
+  const { asOwnerIn } = await import('./harness/stock');
+  const where = `WHERE org_id = $1 AND bill_id = $2 AND line_key = 'L1'`;
+  assert.equal(await asOwnerIn(w.org.orgId, `UPDATE desk_sale_lines SET short_base = 1 ${where}`, [w.org.orgId, billId]), null, 'control: a SHORT line may change its shortfall');
+  assert.equal((await asOwnerIn(w.org.orgId, `UPDATE desk_sale_lines SET rx_flags = '{}' ${where}`, [w.org.orgId, billId]))?.hint, 'DESK_SALE_FIXED');
+  assert.equal((await asOwnerIn(w.org.orgId, `UPDATE desk_sale_lines SET status = 'SHORT', short_base = 2, reason = 'insufficient_stock', rx_flags = '{ndps}' ${where}`,
+    [w.org.orgId, billId]))?.hint, 'DESK_SALE_FIXED', 'a resolve-shaped update cannot rewrite the flags');
+  const insert = (flags: string) => asAppIn(w.org.orgId, `INSERT INTO desk_sale_lines (org_id, premises_id, bill_id, line_key, bill_serial, issued_at, requested_item_id,
+      item_id, qty_base, status, allocated_base, short_base, reason, received_at, rx_flags) VALUES ($1, $2, $3, 'L2', 'S', now(), $4, $4, 1, 'REJECTED', 0, 0, 'unknown_item', now(), $5)`,
+    [w.org.orgId, w.main.id, billId, inj.id, flags]);
+  assert.equal((await insert('{bogus}'))?.constraint, 'desk_sale_lines_rx_flags', 'only the known flags');
+  assert.equal(await insert('{ndps,consumable}'), null);
+  assert.equal((await asAppIn(w.org.orgId, `UPDATE desk_sale_lines SET rx_flags = '{}' ${where}`, [w.org.orgId, billId]))?.hint, 'DESK_SALE_FIXED', 'the app role neither');
+  // A line stored before 030 (NULL: never recorded) may record its flags once; then they are fixed like any other.
+  assert.equal(await asAppIn(w.org.orgId, `INSERT INTO desk_sale_lines (org_id, premises_id, bill_id, line_key, bill_serial, issued_at, requested_item_id,
+      item_id, qty_base, status, allocated_base, short_base, reason, received_at, rx_flags) VALUES ($1, $2, $3, 'L3', 'S', now(), $4, $4, 1, 'SHORT', 0, 1, 'insufficient_stock', now(), NULL)`,
+  [w.org.orgId, w.main.id, billId, inj.id]), null);
+  const old = `WHERE org_id = $1 AND bill_id = $2 AND line_key = 'L3'`;
+  assert.equal(await asAppIn(w.org.orgId, `UPDATE desk_sale_lines SET rx_flags = '{injectable}' ${old}`, [w.org.orgId, billId]), null, 'NULL to a value, once');
+  assert.equal((await asAppIn(w.org.orgId, `UPDATE desk_sale_lines SET rx_flags = '{}' ${old}`, [w.org.orgId, billId]))?.hint, 'DESK_SALE_FIXED');
+  assert.equal((await asOwnerIn(w.org.orgId, `UPDATE desk_sale_lines SET rx_flags = NULL ${old}`, [w.org.orgId, billId]))?.hint, 'DESK_SALE_FIXED', 'nor back to NULL');
+  // A real resolve keeps them.
+  await stock(w, inj, 5, day(200));
+  const line = (await w.owner.call(deskSalesList, { path: '/api/dispensary/desk-sales' })).body.items.find((i: { billId: string; lineKey: string }) => i.billId === billId && i.lineKey === 'L1');
+  const done = await w.owner.call(deskResolve, { params: { id: line.id }, body: {}, headers: { 'reauth-grant': await grant(w.owner, w.aa, 'stock.adjust', w.main.id) } });
+  assert.deepEqual([done.status, done.body.status, done.body.rxFlags], [200, 'POSTED', ['injectable', 'in_clinic_item']], JSON.stringify(done.body));
+});
+
+test('E-56 / D-66: Retry posts a line stored as rejected under the older rule (not_retail_product), recording its flags once if it had none (stored before 030)', async () => {
+  const w = await stockWorld('dsoldrule');
+  const inj = await createItem(w.owner, { category: 'INJECTABLE', displayName: `Inj H ${randomUUID().slice(0, 4)}`, baseUnit: 'VIAL', extraScheduleFlags: ['H'], requiresPrescription: true });
+  await stock(w, inj, 5, day(200));
+  await post(w, [{ type: 'OPENING_BALANCE', itemId: w.glv.id, batchId: null, qtyDelta: 10 }]);
+  on(w);
+  const billId = randomUUID();
+  // L1 and L2 as 029 stored them (no rx_flags: NULL); L3 stored after 030 with its flags already recorded.
+  const old = (key: string, itemId: string, flags: string | null) => asAppIn(w.org.orgId, `INSERT INTO desk_sale_lines (org_id, premises_id, bill_id, line_key, bill_serial,
+      issued_at, requested_item_id, item_id, qty_base, status, allocated_base, short_base, reason, received_at, rx_flags)
+      VALUES ($1, $2, $3, $4, 'OLD-1', now(), $5, $5, 1, 'REJECTED', 0, 0, 'not_retail_product', now(), $6)`, [w.org.orgId, w.main.id, billId, key, itemId, flags]);
+  assert.equal(await old('L1', inj.id, null), null);
+  assert.equal(await old('L2', w.glv.id, null), null);
+  assert.equal(await old('L3', w.glv.id, '{consumable}'), null);
+  const list = async (status: string) => ((await w.owner.call(deskSalesList, { path: `/api/dispensary/desk-sales?status=${status}` })).body.items as
+    { id: string; billId: string; lineKey: string; status: string; reason: string | null; rxFlags: string[] | null }[]).filter((i) => i.billId === billId);
+  const before = new Map((await list('all')).map((l) => [l.lineKey, l]));
+  assert.deepEqual([...before.values()].map((l) => [l.lineKey, l.status, l.reason, l.rxFlags]).sort(),
+    [['L1', 'REJECTED', 'not_retail_product', null], ['L2', 'REJECTED', 'not_retail_product', null], ['L3', 'REJECTED', 'not_retail_product', ['consumable']]]);
+  assert.deepEqual((await list('flagged')).map((l) => l.lineKey), ['L3'], 'never recorded: not flagged yet');
+  const retry = async (key: string) => w.owner.call(deskResolve, { params: { id: before.get(key)!.id }, body: {},
+    headers: { 'reauth-grant': await grant(w.owner, w.aa, 'stock.adjust', w.main.id) } });
+  const injDone = await retry('L1');
+  assert.equal(injDone.status, 200, JSON.stringify(injDone.body));
+  assert.deepEqual([injDone.body.status, injDone.body.allocatedBase, injDone.body.reason, injDone.body.rxFlags],
+    ['POSTED', 1, null, ['requires_prescription', 'schedule_h', 'injectable', 'in_clinic_item']], 'posted, and the exposure is recorded now');
+  assert.deepEqual((await movements(w, inj.id)).filter((m) => m.qty < 0).map((m) => [m.qty, m.actor]), [[-1, w.aa.name]]);
+  // L2 records what its item is at its own Retry: gloves now used for patients.
+  await w.owner.call((await import('../app/api/dispensary/items/[id]/route')).PATCH, { method: 'PATCH', params: { id: w.glv.id }, body: { useFor: 'PATIENTS' } });
+  const glvDone = await retry('L2');
+  assert.deepEqual([glvDone.body.status, glvDone.body.rxFlags], ['POSTED', ['consumable']], JSON.stringify(glvDone.body));
+  const kept = await retry('L3');
+  assert.deepEqual([kept.body.status, kept.body.rxFlags], ['POSTED', ['consumable']], 'a recorded line is never recomputed');
+  assert.deepEqual((await list('flagged')).map((l) => l.lineKey).sort(), ['L1', 'L2', 'L3'], 'the old backlog that took stock shows under Flagged');
+  const again = await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'L1', itemId: inj.id, qtyBase: 1 }], billId));
+  assert.deepEqual(again.body.lines[0], { lineKey: 'L1', status: 'posted', allocatedBase: 1, shortBase: 0, reason: null }, 'the desk\'s Send again sees it posted');
 });
 
 test('E-53: two posts of the same line at once give one set of movements and the same answer', async () => {
@@ -425,11 +645,13 @@ test('D-57: RLS and the self-check stay green with the new tables (forced RLS, t
   on(w);
   await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 1 }]));
   const other = await createOrg('dsrls2');
-  for (const t of ['desk_sale_lines', 'desk_sync_nonces', 'desk_sale_allocations', 'desk_return_lines', 'desk_return_allocations']) {
+  await desk(deskSalesRoute, 'POST', SALES, { ...sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 1 }]), patientName: 'Test Patient' });
+  for (const t of ['desk_sale_lines', 'desk_sync_nonces', 'desk_sale_allocations', 'desk_return_lines', 'desk_return_allocations', 'desk_sale_bills']) {
     const seen = await inOrg(other.orgId, async (c) => (await c.query(`SELECT count(*)::int AS n FROM ${t}`)).rows[0].n);
     assert.equal(seen, 0, `${t}: another tenant sees none`);
   }
-  assert.equal(await inOrg(w.org.orgId, async (c) => (await c.query('SELECT count(*)::int AS n FROM desk_sale_lines')).rows[0].n), 1);
+  assert.equal(await inOrg(w.org.orgId, async (c) => (await c.query('SELECT count(*)::int AS n FROM desk_sale_lines')).rows[0].n), 2);
+  assert.equal(await inOrg(w.org.orgId, async (c) => (await c.query('SELECT count(*)::int AS n FROM desk_sale_bills')).rows[0].n), 1);
   const status = await as('app', (c) => verifySchema(wrap(c)));
   assert.deepEqual(status.failures, []);
   assert.equal(status.ok, true);
@@ -523,4 +745,235 @@ test('D-57: the body is capped at 256 KB while it is read (413, signed or not), 
     setQueryListener(null);
   }
   assert.equal(queries, 0, 'no query (not even the self-check) before the signature holds');
+});
+
+// ---------------------------------------------------------------- D-67: Desk sales shows everything, as it stands now
+
+type ListLine = DeskSaleView;
+type ListBill = { billId: string; billSerial: string; issuedAt: string; patientName: string | null; patientRef: string | null; doctorName: string | null; lines: ListLine[] };
+const deskLog = async (w: StockWorld, status = 'all') => {
+  const r = await w.owner.call(deskSalesList, { path: `/api/dispensary/desk-sales?status=${status}` });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  return r.body as { items: ListLine[]; bills: ListBill[]; open: number };
+};
+const billRows = (w: StockWorld) => inOrg(w.org.orgId, async (c) => (await c.query(
+  'SELECT bill_id AS "billId", patient_name AS "patientName", patient_ref AS "patientRef", doctor_name AS "doctorName" FROM desk_sale_bills ORDER BY received_at')).rows);
+
+test('D-67 E-53: the patient and the doctor are optional; an old desk sends none and the bill shows none; a later resend fills them once; a bad value is dropped, never a 422', async () => {
+  const w = await stockWorld('dsparty');
+  const item = await retail(w, 'Gel');
+  await stock(w, item, 20, day(200));
+  on(w);
+  const billId = randomUUID();
+  const body = sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 2 }], billId);
+  // An old desk: no party fields at all. Works exactly as before, and stores no bill row.
+  const old = await desk(deskSalesRoute, 'POST', SALES, body);
+  assert.equal(old.status, 200, JSON.stringify(old.body));
+  assert.deepEqual(old.body.lines, [{ lineKey: 'L1', status: 'posted', allocatedBase: 2, shortBase: 0, reason: null }]);
+  assert.deepEqual(await billRows(w), []);
+  let b = (await deskLog(w)).bills.find((x) => x.billId === billId)!;
+  assert.deepEqual([b.patientName, b.patientRef, b.doctorName, b.lines.length], [null, null, null, 1]);
+  // The new desk sends the same bill again (its recheck): the same answer, nothing moves, and the bill gains its people.
+  const ref = randomUUID().toUpperCase();
+  const again = await desk(deskSalesRoute, 'POST', SALES, { ...body, patientName: '  Test   Patient ', patientId: ref, doctorName: 'Dr Test' });
+  assert.deepEqual(again.body, old.body);
+  assert.equal((await movements(w, item.id)).length, 1, 'nothing more moved');
+  b = (await deskLog(w)).bills.find((x) => x.billId === billId)!;
+  assert.deepEqual([b.patientName, b.patientRef, b.doctorName], ['Test Patient', ref.toLowerCase(), 'Dr Test']);
+  assert.ok(b.lines.every((l) => l.patientName === 'Test Patient'));
+  // Written once: a third send naming someone else changes nothing (an issued bill never changes at the desk).
+  await desk(deskSalesRoute, 'POST', SALES, { ...body, patientName: 'Someone Else', doctorName: null });
+  assert.deepEqual((await billRows(w)).map((r) => r.patientName), ['Test Patient']);
+  // Bad values are dropped one by one, never refused: a number, a bad id, blank, control characters, too long.
+  const bad = await desk(deskSalesRoute, 'POST', SALES, { ...sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 1 }]), patientName: 42, patientId: 'nope', doctorName: '   ' });
+  assert.equal(bad.status, 200, JSON.stringify(bad.body));
+  assert.equal(bad.body.lines[0].status, 'posted');
+  assert.equal((await billRows(w)).length, 1, 'nothing usable: no bill row');
+  const odd = randomUUID();
+  const r = await desk(deskSalesRoute, 'POST', SALES, { ...sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 1 }], odd), patientName: 'A\u0000B\n\tC', doctorName: 'D'.repeat(300) });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const oddRow = (await billRows(w)).find((x) => x.billId === odd)!;
+  assert.deepEqual([oddRow.patientName, oddRow.patientRef, oddRow.doctorName], ['A B C', null, 'D'.repeat(120)]);
+  // Only the three named fields are new: any other unknown field is still refused, and nothing is stored.
+  const unknown = randomUUID();
+  const u = await desk(deskSalesRoute, 'POST', SALES, { ...sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 1 }], unknown), patientName: 'Test Patient', patientPhone: '0' });
+  assert.deepEqual([u.status, u.body.code, u.body.details?.field], [422, 'UNKNOWN_FIELD', 'patientPhone']);
+  assert.ok(!(await billRows(w)).some((x) => x.billId === unknown));
+  assert.ok(!(await deskLog(w)).bills.some((x) => x.billId === unknown));
+  // The table keeps what it was given: the app role cannot change or delete a bill row.
+  assert.ok(await asAppIn(w.org.orgId, "UPDATE desk_sale_bills SET patient_name = 'Changed' WHERE bill_id = $1", [billId]));
+  assert.ok(await asAppIn(w.org.orgId, 'DELETE FROM desk_sale_bills WHERE bill_id = $1', [billId]));
+  assert.deepEqual((await billRows(w)).find((x) => x.billId === billId)!.patientName, 'Test Patient');
+});
+
+test('D-67 E-54 / E-55: each line as it stands now (taken, part returned, returned, short, rejected, cancelled), with the credit notes and their numbers; Retry shows on the next read', async () => {
+  const w = await stockWorld('dsnow');
+  const item = await retail(w, 'Toner');
+  await stock(w, item, 10, day(200));
+  on(w);
+  const billId = randomUUID();
+  const early = new Date(now().getTime() - 3_600_000).toISOString();
+  const s1 = await desk(deskSalesRoute, 'POST', SALES, { ...sale([
+    { lineKey: 'L1', itemId: item.id, qtyBase: 4 }, { lineKey: 'L2', itemId: item.id, qtyBase: 2 }, { lineKey: 'L3', itemId: item.id, qtyBase: 9 },
+    { lineKey: 'L4', itemId: randomUUID(), qtyBase: 1 }, { lineKey: 'L5', itemId: item.id, qtyBase: 50 }], billId), issuedAt: early, patientName: 'Test Patient', doctorName: 'Dr Test' });
+  assert.deepEqual(s1.body.lines.map((l: { status: string }) => l.status), ['posted', 'posted', 'short', 'rejected', 'short']);
+  const ret = (lines: { lineKey: string; qtyBase: number }[], serial?: string) =>
+    desk(deskReturnsRoute, 'POST', RETURNS, { creditNoteId: randomUUID(), billId, lines, ...(serial === undefined ? {} : { serial }) });
+  // CN/1 puts back 1 of L1 and all of L2.
+  assert.equal((await ret([{ lineKey: 'L1', qtyBase: 1 }, { lineKey: 'L2', qtyBase: 2 }], 'CN/2026-27/0001')).status, 200);
+  // An old desk's credit note (no serial) asks for 9 of L1: only the 3 still out come back.
+  const r2 = await ret([{ lineKey: 'L1', qtyBase: 9 }]);
+  assert.deepEqual(r2.body.lines, [{ lineKey: 'L1', status: 'returned', returnedBase: 3, reason: 'more_than_taken' }]);
+  // CN/3 credits L5, which never took stock: it is cancelled.
+  assert.equal((await ret([{ lineKey: 'L5', qtyBase: 50 }], 'CN/2026-27/0003')).status, 200);
+  // A newer bill, to see the order.
+  const newer = randomUUID();
+  await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'N1', itemId: item.id, qtyBase: 1 }], newer));
+
+  let log = await deskLog(w);
+  const ids = log.bills.map((b) => b.billId);
+  assert.ok(ids.indexOf(newer) < ids.indexOf(billId), 'newest bill first');
+  const bill = log.bills.find((b) => b.billId === billId)!;
+  assert.deepEqual([bill.billSerial, bill.issuedAt, bill.patientName, bill.doctorName], [`B-${billId.slice(0, 6)}`, early, 'Test Patient', 'Dr Test']);
+  const by = new Map(bill.lines.map((l) => [l.lineKey, l]));
+  assert.deepEqual(bill.lines.map((l) => l.lineKey), ['L1', 'L2', 'L3', 'L4', 'L5'], 'the whole bill, in line order');
+  assert.deepEqual([...by.values()].map((l) => [l.lineKey, l.state, l.returnedBase, l.reason]), [
+    ['L1', 'RETURNED', 4, null], ['L2', 'RETURNED', 2, null], ['L3', 'SHORT', 0, 'insufficient_stock'], ['L4', 'REJECTED', 0, 'unknown_item'], ['L5', 'CANCELLED', 0, 'credited']]);
+  assert.deepEqual(by.get('L1')!.credits.map((c) => [c.serial, c.returnedBase, c.status, c.reason]),
+    [['CN/2026-27/0001', 1, 'RETURNED', null], [null, 3, 'RETURNED', 'more_than_taken']], 'returnedBase counts what came back (4), not what was asked (10)');
+  assert.deepEqual(by.get('L5')!.credits.map((c) => [c.serial, c.returnedBase, c.status, c.reason]), [['CN/2026-27/0003', 0, 'NOTHING_TO_RETURN', 'not_posted']]);
+  assert.ok(by.get('L1')!.batches && by.get('L2')!.batches, 'the batches each took');
+  assert.deepEqual(log.items.filter((i) => i.billId === billId).map((i) => i.id), bill.lines.map((l) => l.id), 'items and bills carry the same lines');
+  // Retry: L3 takes its stock once more arrives; the next read says so (no stale row).
+  await stock(w, item, 20, day(300));
+  const g = await grant(w.owner, w.aa, 'stock.adjust', w.main.id);
+  const done = await w.owner.call(deskResolve, { params: { id: by.get('L3')!.id }, body: {}, headers: { 'reauth-grant': g } });
+  assert.deepEqual([done.status, done.body.state, done.body.patientName], [200, 'TAKEN', 'Test Patient']);
+  log = await deskLog(w);
+  assert.equal(log.bills.find((b) => b.billId === billId)!.lines.find((l) => l.lineKey === 'L3')!.state, 'TAKEN');
+  // A credit note for part of it: the next read shows it part returned.
+  await ret([{ lineKey: 'L3', qtyBase: 2 }], 'CN/2026-27/0004');
+  const l3 = (await deskLog(w)).bills.find((b) => b.billId === billId)!.lines.find((l) => l.lineKey === 'L3')!;
+  assert.deepEqual([l3.state, l3.returnedBase, l3.credits.map((c) => c.serial)], ['PART_RETURNED', 2, ['CN/2026-27/0004']]);
+  // The open view keeps whole bills too: only the rejected line is left to fix, under its bill.
+  const open = await deskLog(w, 'open');
+  assert.deepEqual(open.bills.find((b) => b.billId === billId)!.lines.map((l) => l.lineKey), ['L4']);
+  assert.ok(!open.bills.some((b) => b.billId === newer));
+});
+
+test('D-67: deskLineState, billsOf and optionalText', () => {
+  const st = (status: 'POSTED' | 'SHORT' | 'REJECTED' | 'CANCELLED', allocatedBase: number, returnedBase: number) => deskLineState({ status, allocatedBase, returnedBase });
+  assert.deepEqual([st('POSTED', 3, 0), st('POSTED', 3, 1), st('POSTED', 3, 2), st('POSTED', 3, 3), st('POSTED', 3, 4)], ['TAKEN', 'PART_RETURNED', 'PART_RETURNED', 'RETURNED', 'RETURNED']);
+  assert.deepEqual([st('SHORT', 0, 0), st('REJECTED', 0, 0), st('CANCELLED', 0, 0)], ['SHORT', 'REJECTED', 'CANCELLED']);
+  const l = (billId: string, lineKey: string) => ({ billId, lineKey, billSerial: billId, issuedAt: '2026-11-01T00:00:00.000Z', patientName: billId === 'a' ? 'P' : null,
+    patientRef: null, doctorName: null }) as unknown as DeskSaleView;
+  const g = billsOf([l('b', '1'), l('a', '1'), l('b', '2'), l('a', '2')]);
+  assert.deepEqual(g.map((b) => [b.billId, b.patientName, b.lines.map((x) => x.lineKey)]), [['b', null, ['1', '2']], ['a', 'P', ['1', '2']]]);
+  assert.deepEqual([optionalText(' a  b ', 10), optionalText('abcdef', 3), optionalText('ab \u0007', 10), optionalText('', 5), optionalText(' \n ', 5), optionalText(5, 5),
+    optionalText(null, 5), optionalText('😀😀😀', 2), optionalText('ab  cd', 3)], ['a b', 'abc', 'ab', null, null, null, null, '😀😀', 'ab']);
+});
+
+test('D-67 E-54: the credit-note number is stored as sent (trimmed, cut to 40), and a bad one is dropped, never a 422', async () => {
+  const w = await stockWorld('dscnserial');
+  const item = await retail(w, 'Mist');
+  await stock(w, item, 10, day(200));
+  on(w);
+  const billId = randomUUID();
+  await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 3 }, { lineKey: 'L2', itemId: item.id, qtyBase: 3 }, { lineKey: 'L3', itemId: item.id, qtyBase: 3 }], billId));
+  const cn = (lineKey: string, serial: unknown) => desk(deskReturnsRoute, 'POST', RETURNS, { creditNoteId: randomUUID(), billId, serial, lines: [{ lineKey, qtyBase: 1 }] });
+  for (const [k, v] of [['L1', '  CN/7  '], ['L2', 7], ['L3', 'C'.repeat(60)]] as const) {
+    const r = await cn(k, v);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+  }
+  const rows = await inOrg(w.org.orgId, async (c) => (await c.query('SELECT line_key, credit_note_serial FROM desk_return_lines ORDER BY line_key')).rows);
+  assert.deepEqual(rows, [{ line_key: 'L1', credit_note_serial: 'CN/7' }, { line_key: 'L2', credit_note_serial: null }, { line_key: 'L3', credit_note_serial: 'C'.repeat(40) }]);
+  const bad = await desk(deskReturnsRoute, 'POST', RETURNS, { creditNoteId: randomUUID(), billId, serial: 'CN/8', note: 'x', lines: [{ lineKey: 'L1', qtyBase: 1 }] });
+  assert.deepEqual([bad.status, bad.body.code], [422, 'UNKNOWN_FIELD']);
+});
+
+test('D-67 E-55: a bill\'s items are listed in the order printed on it (line_no), not by line key; the place is fixed once stored', async () => {
+  const w = await stockWorld('dsorder');
+  const item = await retail(w, 'Balm');
+  await stock(w, item, 20, day(200));
+  on(w);
+  // The desk's keys share a time prefix and differ in a random tail: here they sort the other way round.
+  const billId = randomUUID();
+  const keys = ['mhz01k7zq', 'mhz01k7b4', 'mhz01k7a0', 'mhz01k7m2'];
+  const r = await desk(deskSalesRoute, 'POST', SALES, sale(keys.map((lineKey) => ({ lineKey, itemId: item.id, qtyBase: 1 })), billId));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const listed = async () => (await deskLog(w)).bills.find((b) => b.billId === billId)!.lines.map((l) => l.lineKey);
+  assert.deepEqual(await listed(), keys, 'as on the bill');
+  assert.deepEqual((await deskLog(w)).items.filter((i) => i.billId === billId).map((i) => i.lineKey), keys, 'items too');
+  // A resend with the lines in another order moves nothing and keeps each line where it was first placed.
+  await desk(deskSalesRoute, 'POST', SALES, sale([...keys].reverse().map((lineKey) => ({ lineKey, itemId: item.id, qtyBase: 1 })), billId));
+  assert.deepEqual(await listed(), keys);
+  const stored = await inOrg(w.org.orgId, async (c) => (await c.query('SELECT line_key, line_no FROM desk_sale_lines WHERE bill_id = $1 ORDER BY line_no', [billId])).rows);
+  assert.deepEqual(stored.map((x) => [x.line_key, x.line_no]), keys.map((k, i) => [k, i + 1]));
+  // The place never changes: not for the app role (no grant), not for the owner (the guard), not even on a SHORT line.
+  const { asOwnerIn } = await import('./harness/stock');
+  const short = randomUUID();
+  await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'S1', itemId: item.id, qtyBase: 500 }], short));
+  const where = "WHERE org_id = $1 AND bill_id = $2 AND line_key = 'S1'";
+  assert.equal((await asOwnerIn(w.org.orgId, `UPDATE desk_sale_lines SET line_no = 2 ${where}`, [w.org.orgId, short]))?.hint, 'DESK_SALE_FIXED');
+  assert.ok(await asAppIn(w.org.orgId, `UPDATE desk_sale_lines SET line_no = 2 ${where}`, [w.org.orgId, short]), 'the app role cannot write it');
+  assert.equal(await asOwnerIn(w.org.orgId, `UPDATE desk_sale_lines SET short_base = 499 ${where}`, [w.org.orgId, short]), null, 'control: the shortfall may change');
+  // A line stored before 031 has no place: it keeps the old order (received, then key), after any that have one.
+  assert.equal(await asAppIn(w.org.orgId, `INSERT INTO desk_sale_lines (org_id, premises_id, bill_id, line_key, bill_serial, issued_at, requested_item_id,
+      item_id, qty_base, status, allocated_base, short_base, reason, received_at)
+      SELECT $1, $2, $3, 'aaa', 'S', issued_at, $4, $4, 1, 'REJECTED', 0, 0, 'unknown_item', now() FROM desk_sale_lines WHERE bill_id = $3 LIMIT 1`,
+  [w.org.orgId, w.main.id, billId, item.id]), null);
+  assert.deepEqual(await listed(), [...keys, 'aaa']);
+  assert.equal((await asOwnerIn(w.org.orgId, "INSERT INTO desk_sale_lines (org_id, premises_id, bill_id, line_key, bill_serial, issued_at, requested_item_id, item_id, qty_base, status, allocated_base, short_base, reason, received_at, line_no) VALUES ($1, $2, $3, 'bad', 'S', now(), $4, $4, 1, 'REJECTED', 0, 0, 'unknown_item', now(), 0)",
+    [w.org.orgId, w.main.id, billId, item.id]))?.constraint, 'desk_sale_lines_line_no');
+});
+
+test('D-67 / 06a §4.3: a stock-only role sees the bills and the doctor but never the patient (name or desk id); a role that may see patients does', async () => {
+  const w = await stockWorld('dsprivacy');
+  const item = await retail(w, 'Wash');
+  await stock(w, item, 10, day(200));
+  on(w);
+  const billId = randomUUID();
+  const ref = randomUUID();
+  await desk(deskSalesRoute, 'POST', SALES, { ...sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 1 }], billId), patientName: 'Sunita Patil', patientId: ref, doctorName: 'Dr Test' });
+  const plain = randomUUID();
+  await desk(deskSalesRoute, 'POST', SALES, sale([{ lineKey: 'L1', itemId: item.id, qtyBase: 1 }], plain));
+  await inOrg(w.org.orgId, async (c) => {
+    await c.query("INSERT INTO org_roles (org_id, key, name) VALUES ($1, 'store', 'Store'), ($1, 'storerx', 'Store with prescriptions')", [w.org.orgId]);
+    await c.query(`INSERT INTO role_grants (org_id, role_key, permission, allowed) VALUES ($1, 'store', 'stock.view', true), ($1, 'store', 'stock.receive', true),
+                   ($1, 'storerx', 'stock.view', true), ($1, 'storerx', 'rx.view', true)`, [w.org.orgId]);
+  });
+  const browserFor = async (role: string) => {
+    const st = await createStaff(w.org, { role, signingPin: null });
+    const b = new Browser();
+    await b.signIn(w.org.slug, st.login, st.password);
+    return b;
+  };
+  const store = await browserFor('store');
+  const r = await store.call(deskSalesList, { path: '/api/dispensary/desk-sales?status=all' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const text = JSON.stringify(r.body);
+  assert.ok(!text.includes('Sunita') && !text.includes('Patil') && !text.includes(ref), 'no patient name or id anywhere in the answer');
+  const bill = (r.body.bills as ListBill[]).find((b) => b.billId === billId)! as ListBill & { patientHidden: boolean };
+  assert.deepEqual([bill.patientName, bill.patientRef, bill.patientHidden, bill.doctorName], [null, null, true, 'Dr Test']);
+  assert.ok((r.body.items as (ListLine & { patientHidden: boolean })[]).filter((i) => i.billId === billId).every((i) => i.patientName === null && i.patientRef === null && i.patientHidden));
+  const none = (r.body.bills as (ListBill & { patientHidden: boolean })[]).find((b) => b.billId === plain)!;
+  assert.equal(none.patientHidden, false, 'nothing was sent: nothing hidden');
+  // A role with rx.view (06a §4.3's list) sees the patient; so does the owner.
+  for (const b of [await browserFor('storerx'), w.owner]) {
+    const x = ((await b.call(deskSalesList, { path: '/api/dispensary/desk-sales?status=all' })).body.bills as (ListBill & { patientHidden: boolean })[]).find((y) => y.billId === billId)!;
+    assert.deepEqual([x.patientName, x.patientRef, x.patientHidden, x.doctorName], ['Sunita Patil', ref, false, 'Dr Test']);
+  }
+  const perms = (...p: string[]) => canSeePatients({ permissions: new Set(p) as never });
+  assert.deepEqual([perms('stock.view'), perms('stock.view', 'stock.reports', 'stock.adjust'), perms('patients.view'), perms('rx.view'), perms('dispense.view')],
+    [false, false, true, true, true]);
+});
+
+test('D-67: deskBillParty: the header shows the name and the doctor, else says why there is none; a desk patient id alone is not shown', () => {
+  const p = (patientName: string | null, doctorName: string | null, patientHidden = false) => deskBillParty({ patientName, doctorName, patientHidden });
+  assert.deepEqual(p('Test Patient', 'Dr Test'), { patient: 'Test Patient', doctor: 'Dr Test', note: null });
+  assert.deepEqual(p('Test Patient', null), { patient: 'Test Patient', doctor: null, note: null });
+  assert.deepEqual(p(null, 'Dr Test'), { patient: null, doctor: 'Dr Test', note: null });
+  assert.deepEqual(p(null, null), { patient: null, doctor: null, note: 'none' }, 'nothing, or only a desk patient id: the "not sent" line, never a blank');
+  assert.deepEqual(p(null, 'Dr Test', true), { patient: null, doctor: 'Dr Test', note: 'hidden' });
+  assert.deepEqual(p(null, null, true), { patient: null, doctor: null, note: 'hidden' });
 });

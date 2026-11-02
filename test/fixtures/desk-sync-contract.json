@@ -1,0 +1,30 @@
+{
+  "rev": "DESK-SYNC-V1 feed rev 2 (D-66); E-53 patientName/patientId/doctorName and E-54 serial, all optional (D-67)",
+  "feed": {
+    "items": [
+      {"id":"0b9a1c2e-0000-4000-8000-000000000001","displayName":"Dolo 650","category":"MEDICINE","baseUnit":"TABLET","onHandBase":150,"dispensableBase":120,"maxMrpPaisePerBase":205,"active":true,"useFor":"PATIENTS","trackBatches":true,"requiresPrescription":false,"schedules":[],"hsn":"3004","units":[{"name":"Tablet","baseQty":1},{"name":"Strip of 15","baseQty":15}]},
+      {"id":"0b9a1c2e-0000-4000-8000-000000000002","displayName":"Inj. Ceftriaxone 1g","category":"INJECTABLE","baseUnit":"VIAL","onHandBase":10,"dispensableBase":10,"maxMrpPaisePerBase":6450,"active":true,"useFor":"IN_CLINIC","trackBatches":true,"requiresPrescription":true,"schedules":["H"],"hsn":"30042019","units":[{"name":"Vial","baseQty":1}]},
+      {"id":"0b9a1c2e-0000-4000-8000-000000000003","displayName":"Nitrile gloves","category":"CONSUMABLE","baseUnit":"PIECE","onHandBase":200,"dispensableBase":200,"maxMrpPaisePerBase":null,"active":true,"useFor":"IN_CLINIC","trackBatches":false,"requiresPrescription":false,"schedules":[],"hsn":null,"units":[{"name":"Piece","baseQty":1},{"name":"Box of 100","baseQty":100},{"name":"Carton of 2000","baseQty":2000}]},
+      {"id":"0b9a1c2e-0000-4000-8000-000000000004","displayName":"Sunscreen SPF 50","category":"RETAIL_PRODUCT","baseUnit":"UNIT","onHandBase":0,"dispensableBase":0,"maxMrpPaisePerBase":null,"active":true,"useFor":"BOTH","trackBatches":true,"requiresPrescription":false,"schedules":[],"hsn":"3304","units":[]},
+      {"id":"0b9a1c2e-0000-4000-8000-000000000005","displayName":"Alprazolam 0.5","category":"MEDICINE","baseUnit":"TABLET","onHandBase":30,"dispensableBase":30,"maxMrpPaisePerBase":12,"active":true,"useFor":"PATIENTS","trackBatches":true,"requiresPrescription":true,"schedules":["H","NDPS"],"hsn":"3004","units":[{"name":"Tablet","baseQty":1}]},
+      {"id":"0b9a1c2e-0000-4000-8000-000000000006","displayName":"Old pharmacy item","category":"MEDICINE","baseUnit":"TABLET","onHandBase":5,"dispensableBase":5,"maxMrpPaisePerBase":100,"active":true},
+      {"id":"0b9a1c2e-0000-4000-8000-000000000007","displayName":"Bad new fields","category":"MEDICINE","baseUnit":"TABLET","onHandBase":5,"dispensableBase":5,"maxMrpPaisePerBase":100,"active":true,"useFor":"SOMETIMES","trackBatches":"no","requiresPrescription":"yes","schedules":["H","Z","H"],"hsn":"30 04","units":[{"name":"","baseQty":10},{"name":"Strip","baseQty":10.5}]}
+    ]
+  },
+  "deskParsed": [
+    {"id":"0b9a1c2e-0000-4000-8000-000000000001","useFor":"PATIENTS","trackBatches":true,"requiresPrescription":false,"schedules":[],"hsn":"3004","units":[{"name":"Tablet","baseQty":1},{"name":"Strip of 15","baseQty":15}]},
+    {"id":"0b9a1c2e-0000-4000-8000-000000000002","useFor":"IN_CLINIC","trackBatches":true,"requiresPrescription":true,"schedules":["H"],"hsn":"30042019","units":[{"name":"Vial","baseQty":1}]},
+    {"id":"0b9a1c2e-0000-4000-8000-000000000003","useFor":"IN_CLINIC","trackBatches":false,"requiresPrescription":false,"schedules":[],"hsn":null,"units":[{"name":"Piece","baseQty":1},{"name":"Box of 100","baseQty":100}]},
+    {"id":"0b9a1c2e-0000-4000-8000-000000000004","useFor":"BOTH","trackBatches":true,"requiresPrescription":false,"schedules":[],"hsn":"3304","units":[{"name":"Unit","baseQty":1}]},
+    {"id":"0b9a1c2e-0000-4000-8000-000000000005","useFor":"PATIENTS","trackBatches":true,"requiresPrescription":true,"schedules":["H","NDPS"],"hsn":"3004","units":[{"name":"Tablet","baseQty":1}]},
+    {"id":"0b9a1c2e-0000-4000-8000-000000000006","useFor":null,"trackBatches":null,"requiresPrescription":null,"schedules":[],"hsn":null,"units":[{"name":"Tablet","baseQty":1}]},
+    {"id":"0b9a1c2e-0000-4000-8000-000000000007","useFor":null,"trackBatches":null,"requiresPrescription":null,"schedules":["H"],"hsn":null,"units":[{"name":"Tablet","baseQty":1}]}
+  ],
+  "sale": {"billId":"5d0c7e1a-0000-4000-8000-0000000000b1","serial":"INV/2026-27/0042","issuedAt":"2026-11-01T09:30:00.000Z","lines":[{"lineKey":"l1","itemId":"0b9a1c2e-0000-4000-8000-000000000001","qtyBase":30},{"lineKey":"l2","itemId":"0b9a1c2e-0000-4000-8000-000000000002","qtyBase":1},{"lineKey":"l3","itemId":"0b9a1c2e-0000-4000-8000-000000000003","qtyBase":100}]},
+  "saleWithParty": {"billId":"5d0c7e1a-0000-4000-8000-0000000000b1","serial":"INV/2026-27/0042","issuedAt":"2026-11-01T09:30:00.000Z","lines":[{"lineKey":"l1","itemId":"0b9a1c2e-0000-4000-8000-000000000001","qtyBase":30},{"lineKey":"l2","itemId":"0b9a1c2e-0000-4000-8000-000000000002","qtyBase":1},{"lineKey":"l3","itemId":"0b9a1c2e-0000-4000-8000-000000000003","qtyBase":100}],"patientName":"Test Patient","patientId":"5d0c7e1a-0000-4000-8000-0000000000a1","doctorName":"Dr Test Doctor"},
+  "saleAnswerNew": {"lines":[{"lineKey":"l1","status":"posted","allocatedBase":30,"shortBase":0,"reason":null},{"lineKey":"l2","status":"posted","allocatedBase":1,"shortBase":0,"reason":null},{"lineKey":"l3","status":"posted","allocatedBase":100,"shortBase":0,"reason":null}]},
+  "saleAnswerOld": {"lines":[{"lineKey":"l1","status":"posted","allocatedBase":30,"shortBase":0,"reason":null},{"lineKey":"l2","status":"rejected","allocatedBase":0,"shortBase":0,"reason":"not_retail_product"},{"lineKey":"l3","status":"rejected","allocatedBase":0,"shortBase":0,"reason":"not_retail_product"}]},
+  "return": {"creditNoteId":"5d0c7e1a-0000-4000-8000-0000000000c1","billId":"5d0c7e1a-0000-4000-8000-0000000000b1","lines":[{"lineKey":"l1","qtyBase":30}]},
+  "returnWithSerial": {"creditNoteId":"5d0c7e1a-0000-4000-8000-0000000000c1","billId":"5d0c7e1a-0000-4000-8000-0000000000b1","lines":[{"lineKey":"l1","qtyBase":30}],"serial":"CN/2026-27/0007"},
+  "returnAnswer": {"lines":[{"lineKey":"l1","status":"returned","returnedBase":30,"reason":null}]}
+}

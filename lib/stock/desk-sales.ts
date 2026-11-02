@@ -9,11 +9,14 @@ import { consumeGrant } from '../auth/reauth';
 import { allocate, isInsufficient, type Allocation, type BatchStock } from './allocate';
 import { lockBalances, postMovements, withStockTx, type Actor } from './ledger';
 import { inScope } from './scope';
+import { SCHEDULES_SQL, USE_FOR_SQL } from './items';
 
 /**
  * The stock side of the desk's sales (06a §6.7, §9.3 desk_sale; D-57). The desk is the only
  * billing system; a bill it issues moves stock here, line by line:
- * - only items given to patients that are RETAIL_PRODUCT or MEDICINE (D-59; v1 was retail only), active;
+ * - any active item of the organisation, whatever its category or use (D-66; v1 was retail only, D-59
+ *   added medicines). Nothing about the patient, prescriber or prescription gates a sale: what the
+ *   item needs (a prescription, a schedule, an in-clinic use) is recorded on the line (`rx_flags`), never enforced;
  * - FEFO (allocate.ts) over the premises' default STORE only: never quarantine, never an expired
  *   batch, never a placeholder batch whose details are pending (D-55);
  * - all of a line or none of it: a line that cannot be fully allocated posts nothing and is kept
@@ -24,27 +27,55 @@ export type DeskLineStatus = 'POSTED' | 'SHORT' | 'REJECTED' | 'CANCELLED';
 export interface DeskItem {
   id: string;
   category: string;
-  useFor: string | null;
+  /** Resolved with the category's default (D-54), never null. */
+  useFor: string;
   active: boolean;
+  requiresPrescription: boolean;
+  /** Effective schedule flags (master ∪ extra), in SCHEDULE_FLAGS order. */
+  schedules: string[];
 }
 
-/** The categories the desk may sell (D-59): retail products and medicines; never injectables or consumables. */
-export const DESK_CATEGORIES: readonly string[] = ['RETAIL_PRODUCT', 'MEDICINE'];
-
-/** Why an item cannot be sold through the desk, or null if it can. The code keeps its v1 name (the contract's). */
+/**
+ * Why an item cannot be sold through the desk, or null if it can (D-66): only an item this
+ * organisation does not have, or one removed from the Stock list. Category and use never refuse
+ * a line any more; lines stored under the older rule keep their `not_retail_product` and
+ * `not_for_patients` reasons, and Retry (E-56) posts them.
+ */
 export function deskIneligibility(item: DeskItem | undefined): string | null {
   if (!item) return 'unknown_item';
-  if (!DESK_CATEGORIES.includes(item.category)) return 'not_retail_product';
-  // D-54: NULL is the category's default, which for a retail product or a medicine is "given to patients".
-  if (item.useFor === 'IN_CLINIC') return 'not_for_patients';
   if (!item.active) return 'item_inactive';
   return null;
+}
+
+/** The values `desk_sale_lines.rx_flags` may hold (migration 030's CHECK), in the order a line lists them. */
+export const RX_FLAGS = ['requires_prescription', 'schedule_h', 'schedule_h1', 'schedule_x', 'schedule_g', 'schedule_h2', 'ndps',
+  'injectable', 'consumable', 'in_clinic_item'] as const;
+const SCHEDULE_RX_FLAG: Record<string, (typeof RX_FLAGS)[number]> = {
+  H: 'schedule_h', H1: 'schedule_h1', X: 'schedule_x', G: 'schedule_g', H2: 'schedule_h2', NDPS: 'ndps',
+};
+
+/**
+ * What a desk sale of the item is exposed to (D-66): recorded on the line when it is received,
+ * never enforced, never recomputed. An unknown item has none.
+ */
+export function rxFlagsOf(item: DeskItem | undefined): string[] {
+  if (!item) return [];
+  const on = new Set<string>();
+  if (item.requiresPrescription) on.add('requires_prescription');
+  for (const f of item.schedules) if (SCHEDULE_RX_FLAG[f]) on.add(SCHEDULE_RX_FLAG[f]);
+  if (item.category === 'INJECTABLE') on.add('injectable');
+  if (item.category === 'CONSUMABLE') on.add('consumable');
+  if (item.useFor === 'IN_CLINIC') on.add('in_clinic_item');
+  return RX_FLAGS.filter((f) => on.has(f));
 }
 
 export async function deskItemsById(db: Db, orgId: string, ids: readonly string[]): Promise<Map<string, DeskItem>> {
   if (ids.length === 0) return new Map();
   const rows = await db.rows<DeskItem>(
-    `SELECT id, category, use_for AS "useFor", active FROM items WHERE org_id = $1 AND id = ANY($2::uuid[])`, [orgId, [...new Set(ids)]]);
+    `SELECT i.id, i.category, ${USE_FOR_SQL} AS "useFor", i.active, i.requires_prescription AS "requiresPrescription",
+            ${SCHEDULES_SQL} AS schedules
+       FROM items i LEFT JOIN medicine_master m ON m.id = i.master_id
+      WHERE i.org_id = $1 AND i.id = ANY($2::uuid[])`, [orgId, [...new Set(ids)]]);
   return new Map(rows.map((r) => [r.id, r]));
 }
 
@@ -146,9 +177,52 @@ export interface DeskSaleView {
   reason: string | null;
   resolvedAt: string | null;
   resolvedBy: string | null;
-  /** The batches the line took its stock from ("B043 ×2"), and how much was credited back. */
+  /** The batches the line took its stock from ("B043 ×2"), and how much credit notes put back (the stock, not what was asked). */
   batches: string | null;
   returnedBase: number;
+  /** D-67: each credit note that reached the line, oldest first; `serial` null when the desk did not send one (or before 031). */
+  credits: DeskCredit[];
+  /** D-67: what the line is now, from the stored status and what came back (deskLineState). */
+  state: DeskLineState;
+  /**
+   * D-67: the bill's patient and doctor when the desk sent them (desk_sale_bills); null otherwise. The patient
+   * (name and desk id) is shown only to a caller who may see patients (canSeePatients, 06a §4.3); for anyone else
+   * both are null and `patientHidden` says whether the desk had sent one. The doctor is a prescriber, not a patient: always shown.
+   */
+  patientName: string | null;
+  patientRef: string | null;
+  patientHidden: boolean;
+  doctorName: string | null;
+  /**
+   * D-66: what the line was exposed to when it was received (RX_FLAGS); recorded, never enforced.
+   * Null: stored before migration 030 and never retried since, so never recorded.
+   */
+  rxFlags: string[] | null;
+}
+
+export interface DeskCredit { serial: string | null; returnedBase: number; status: 'RETURNED' | 'NOTHING_TO_RETURN'; reason: string | null; receivedAt: string }
+
+/**
+ * A line as it stands now (D-67), for the page: TAKEN (all its stock still out), PART_RETURNED (a credit note put
+ * some back), RETURNED (credit notes put all of it back), SHORT, REJECTED, CANCELLED (credited before it took any).
+ */
+export type DeskLineState = 'TAKEN' | 'PART_RETURNED' | 'RETURNED' | 'SHORT' | 'REJECTED' | 'CANCELLED';
+export function deskLineState(l: { status: DeskLineStatus; allocatedBase: number; returnedBase: number }): DeskLineState {
+  if (l.status !== 'POSTED') return l.status;
+  if (l.returnedBase <= 0) return 'TAKEN';
+  return l.returnedBase >= l.allocatedBase ? 'RETURNED' : 'PART_RETURNED';
+}
+
+/** D-67: one bill on Desk sales, its lines as they stand now. */
+export interface DeskBillView {
+  billId: string;
+  billSerial: string;
+  issuedAt: string;
+  patientName: string | null;
+  patientRef: string | null;
+  patientHidden: boolean;
+  doctorName: string | null;
+  lines: DeskSaleView[];
 }
 
 const VIEW = `
@@ -159,39 +233,98 @@ const VIEW = `
          (SELECT string_agg(coalesce(bt.batch_no, '—') || ' ×' || a.qty_base, ', ' ORDER BY a.alloc_no)
             FROM desk_sale_allocations a LEFT JOIN batches bt ON bt.org_id = a.org_id AND bt.id = a.batch_id
            WHERE a.org_id = d.org_id AND a.sale_line_id = d.id) AS batches,
-         coalesce((SELECT sum(r.qty_base)::int FROM desk_return_lines r WHERE r.org_id = d.org_id AND r.sale_line_id = d.id), 0) AS "returnedBase"
+         coalesce((SELECT sum(r.returned_base)::int FROM desk_return_lines r WHERE r.org_id = d.org_id AND r.sale_line_id = d.id), 0) AS "returnedBase",
+         (SELECT coalesce(jsonb_agg(jsonb_build_object('serial', r.credit_note_serial, 'returnedBase', r.returned_base, 'status', r.status,
+                                                       'reason', r.reason, 'receivedAt', r.received_at) ORDER BY r.received_at, r.id), '[]'::jsonb)
+            FROM desk_return_lines r WHERE r.org_id = d.org_id AND r.sale_line_id = d.id) AS credits,
+         d.rx_flags AS "rxFlags",
+         sb.patient_name AS "patientName", sb.patient_ref AS "patientRef", sb.doctor_name AS "doctorName"
     FROM desk_sale_lines d
     LEFT JOIN items i ON i.org_id = d.org_id AND i.id = d.item_id
     LEFT JOIN staff_users u ON u.org_id = d.org_id AND u.id = d.resolved_by
+    LEFT JOIN desk_sale_bills sb ON sb.org_id = d.org_id AND sb.bill_id = d.bill_id
    WHERE d.org_id = $1`;
-type Row = Omit<DeskSaleView, 'issuedAt' | 'receivedAt' | 'resolvedAt'> & { issuedAt: Date; receivedAt: Date; resolvedAt: Date | null };
-const view = (r: Row): DeskSaleView => ({ ...r, issuedAt: r.issuedAt.toISOString(), receivedAt: r.receivedAt.toISOString(), resolvedAt: r.resolvedAt?.toISOString() ?? null });
+type Row = Omit<DeskSaleView, 'issuedAt' | 'receivedAt' | 'resolvedAt' | 'state' | 'credits' | 'patientHidden'> & { issuedAt: Date; receivedAt: Date; resolvedAt: Date | null;
+  credits: (Omit<DeskCredit, 'receivedAt'> & { receivedAt: string })[] };
+
+/**
+ * 06a §4.3 (D-1): a stock-only role sees no patient name anywhere. Desk sales is gated on `stock.view`, so the
+ * bill's patient is shown only to a caller who also holds `patients.view`, `rx.view` or `dispense.view` (E-31's rule).
+ */
+export function canSeePatients(s: Pick<Session, 'permissions'>): boolean {
+  return s.permissions.has('patients.view') || s.permissions.has('rx.view') || s.permissions.has('dispense.view');
+}
+const view = (r: Row, patients: boolean): DeskSaleView => ({
+  ...r, issuedAt: r.issuedAt.toISOString(), receivedAt: r.receivedAt.toISOString(), resolvedAt: r.resolvedAt?.toISOString() ?? null,
+  credits: r.credits.map((c) => ({ ...c, receivedAt: new Date(c.receivedAt).toISOString() })), state: deskLineState(r),
+  patientName: patients ? r.patientName : null, patientRef: patients ? r.patientRef : null,
+  patientHidden: !patients && (r.patientName !== null || r.patientRef !== null),
+});
+
+/** The lines grouped by bill, in the order given (newest bill first); the bill's fields are any line's (they are the same on each). */
+export function billsOf(lines: readonly DeskSaleView[]): DeskBillView[] {
+  const out = new Map<string, DeskBillView>();
+  for (const l of lines) {
+    let b = out.get(l.billId);
+    if (!b) {
+      b = { billId: l.billId, billSerial: l.billSerial, issuedAt: l.issuedAt, patientName: l.patientName, patientRef: l.patientRef, patientHidden: l.patientHidden,
+        doctorName: l.doctorName, lines: [] };
+      out.set(l.billId, b);
+    }
+    b.lines.push(l);
+  }
+  return [...out.values()];
+}
 const notFound = () => new HttpError(404, 'DESK_SALE_NOT_FOUND', 'No such desk sale line.');
 
-/** E-55: the desk's sale lines at the caller's premises: open ones (short or rejected) by default, `?status=all` for every line. */
-export async function listDeskSales(s: Session, q: URLSearchParams): Promise<{ items: DeskSaleView[]; open: number }> {
+const STATUS_FILTER: Record<string, string> = {
+  open: "AND d.status IN ('SHORT','REJECTED')",
+  all: '',
+  // D-66: every line sold with a prescription, schedule, injectable, consumable or in-clinic flag, whatever its status.
+  flagged: "AND d.rx_flags <> '{}'",
+};
+
+/** The most bills E-55 answers (D-67): whole bills, so a bill is never cut in half. */
+export const DESK_SALES_BILLS = 200;
+
+/**
+ * E-55: the desk's sale lines at the caller's premises: open ones (short or rejected) by default, `?status=all` for
+ * every line, `flagged` for lines with rx_flags. The newest DESK_SALES_BILLS bills that have a matching line, with
+ * every matching line of each (D-67) in the order printed on the bill (line_no; lines stored before 031: received, then
+ * line key), as `items` (lines) and `bills` (the same lines grouped by bill). Read fresh
+ * on each call: a Retry or a credit note shows on the next read.
+ */
+export async function listDeskSales(s: Session, q: URLSearchParams): Promise<{ items: DeskSaleView[]; bills: DeskBillView[]; open: number }> {
   const status = q.get('status') ?? 'open';
-  if (status !== 'open' && status !== 'all') throw new HttpError(422, 'FIELD_INVALID', 'status is open or all.', { field: 'status', rule: 'enum' });
+  if (!Object.hasOwn(STATUS_FILTER, status)) throw new HttpError(422, 'FIELD_INVALID', 'status is open, all or flagged.', { field: 'status', rule: 'enum' });
   const premises = s.premises.map((p) => p.id);
   return withTenant(s.orgId, async (db) => {
-    const rows = await db.rows<Row>(`${VIEW} AND d.premises_id = ANY($2::uuid[]) ${status === 'open' ? "AND d.status IN ('SHORT','REJECTED')" : ''}
-                                     ORDER BY d.issued_at DESC, d.received_at DESC, d.line_key LIMIT 500`, [s.orgId, premises]);
+    const rows = await db.rows<Row>(
+      `${VIEW} AND d.premises_id = ANY($2::uuid[]) ${STATUS_FILTER[status]}
+          AND d.bill_id IN (SELECT d.bill_id FROM desk_sale_lines d WHERE d.org_id = $1 AND d.premises_id = ANY($2::uuid[]) ${STATUS_FILTER[status]}
+                             GROUP BY d.bill_id ORDER BY max(d.issued_at) DESC, d.bill_id LIMIT $3)
+        ORDER BY d.issued_at DESC, d.bill_id, d.line_no NULLS LAST, d.received_at, d.line_key`, [s.orgId, premises, DESK_SALES_BILLS]);
     const open = (await db.rows<{ n: number }>(`SELECT count(*)::int AS n FROM desk_sale_lines WHERE org_id = $1 AND premises_id = ANY($2::uuid[]) AND status IN ('SHORT','REJECTED')`,
       [s.orgId, premises]))[0].n;
-    return { items: rows.map(view), open };
+    const patients = canSeePatients(s);
+    const items = rows.map((r) => view(r, patients));
+    return { items, bills: billsOf(items), open };
   });
 }
 
 export async function getDeskSale(s: Session, id: string): Promise<DeskSaleView> {
   const r = await withTenant(s.orgId, async (db) => (await db.rows<Row>(`${VIEW} AND d.id = $2`, [s.orgId, id]))[0]);
   if (!r || !inScope(s, r.premisesId)) throw notFound();
-  return view(r);
+  return view(r, canSeePatients(s));
 }
 
 /**
  * E-56: try a short or rejected line again, after stock was counted or received (or the item
  * corrected). A line a credit note has reached is refused (409 DESK_SALE_CREDITED). Signed with the `stock.adjust` grant for the line's premises (D-33). The movements
  * name the person who resolved it. Still short: the line stays SHORT with the new shortfall.
+ * A line stored before migration 030 has no `rx_flags` (NULL): the first Retry records its item's
+ * flags, whatever the outcome, so the old backlog that now takes stock is flagged (D-66). A line
+ * that has them keeps them: they are never recomputed.
  */
 export async function resolveDeskSale(s: Session, id: string, grantId: string | undefined): Promise<DeskSaleView> {
   await withStockTx(s, async (db) => {
@@ -211,8 +344,10 @@ export async function resolveDeskSale(s: Session, id: string, grantId: string | 
       staffUserId: s.staffUserId, sessionId: s.sid, deviceId: s.deviceId, entityId: id, detail: { kind } });
     const item = line.itemId ? (await deskItemsById(db, s.orgId, [line.itemId])).get(line.itemId) : undefined;
     const reject = deskIneligibility(item);
+    const flags = rxFlagsOf(item);
     if (reject) {
-      await db.rows(`UPDATE desk_sale_lines SET status = 'REJECTED', short_base = 0, reason = $3 WHERE org_id = $1 AND id = $2`, [s.orgId, id, reject]);
+      await db.rows(`UPDATE desk_sale_lines SET status = 'REJECTED', short_base = 0, reason = $3, rx_flags = coalesce(rx_flags, $4::text[])
+                      WHERE org_id = $1 AND id = $2`, [s.orgId, id, reject, flags]);
       await audit('rejected');
       return;
     }
@@ -221,13 +356,15 @@ export async function resolveDeskSale(s: Session, id: string, grantId: string | 
     await lockBalances(db, s.orgId, [{ itemId: line.itemId!, locationId: storeId }]);
     const r = await allocateAtStore(db, s.orgId, line.itemId!, storeId, line.qtyBase, todayIst());
     if (!r.ok) {
-      await db.rows(`UPDATE desk_sale_lines SET status = 'SHORT', short_base = $3, reason = $4 WHERE org_id = $1 AND id = $2`, [s.orgId, id, r.shortBase, r.reason]);
+      await db.rows(`UPDATE desk_sale_lines SET status = 'SHORT', short_base = $3, reason = $4, rx_flags = coalesce(rx_flags, $5::text[])
+                      WHERE org_id = $1 AND id = $2`, [s.orgId, id, r.shortBase, r.reason, flags]);
       await audit('short');
       return;
     }
     await postSaleAllocations(db, actor, at, { id, premisesId: line.premisesId, itemId: line.itemId!, storeId }, r.allocations);
     await db.rows(`UPDATE desk_sale_lines SET status = 'POSTED', allocated_base = qty_base, short_base = 0, reason = NULL, location_id = $3,
-                          resolved_at = $4, resolved_by = $5 WHERE org_id = $1 AND id = $2`, [s.orgId, id, storeId, at, s.staffUserId]);
+                          resolved_at = $4, resolved_by = $5, rx_flags = coalesce(rx_flags, $6::text[]) WHERE org_id = $1 AND id = $2`,
+    [s.orgId, id, storeId, at, s.staffUserId, flags]);
     await audit('posted');
   });
   return getDeskSale(s, id);

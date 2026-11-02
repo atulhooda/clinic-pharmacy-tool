@@ -44,3 +44,14 @@ export function packSizes(pack: string | null): number[] {
   const n = /(\d+)/.exec(pack);
   return n ? [Number(n[1])] : [];
 }
+
+/**
+ * D-67: what a Desk sales bill header says about its people. The patient's name and the doctor when there are
+ * any; otherwise a note: `hidden` when the desk sent a patient the caller may not see (06a §4.3), `none` when the
+ * desk sent no name and no doctor (a desk patient id alone means nothing to pharmacy staff, so it is never shown).
+ */
+export function deskBillParty(b: { patientName: string | null; patientHidden?: boolean; doctorName: string | null }):
+  { patient: string | null; doctor: string | null; note: 'hidden' | 'none' | null } {
+  const note = b.patientHidden ? 'hidden' : !b.patientName && !b.doctorName ? 'none' : null;
+  return { patient: b.patientName || null, doctor: b.doctorName || null, note };
+}

@@ -180,6 +180,10 @@ const retAlloc = (o: OrgFixture, w: World, d: DeskWorld, extra: Record<string, u
   org_id: o.orgId, premises_id: o.premisesId, return_line_id: d.returnLineId, sale_allocation_id: d.saleAllocId, item_id: w.itemId,
   batch_id: w.batchId, location_id: w.locationId, qty_base: 1, created_at: new Date(), ...extra });
 
+/** D-67: a bill's patient and doctor in o. */
+const saleBill = (o: OrgFixture, extra: Record<string, unknown> = {}) => row(o, 'desk_sale_bills', {
+  org_id: o.orgId, premises_id: o.premisesId, bill_id: randomUUID(), patient_name: 'Test Patient', received_at: new Date(), ...extra });
+
 export const FK_BUILDERS: Record<string, FkBuilder> = {
   async org_settings_history_settings_fk(a, b) {
     const wb = await world(b);
@@ -466,6 +470,9 @@ export const FK_BUILDERS: Record<string, FkBuilder> = {
   async desk_return_lines_sale_fk(a, b) {
     return retLine(a, await world(a), await deskWorld(b));
   },
+  async desk_sale_bills_premises_fk(a, b) {
+    return saleBill(a, { premises_id: b.premisesId });
+  },
   async desk_return_allocations_line_fk(a, b) {
     return retAlloc(a, await world(a), await deskWorld(a), { return_line_id: (await deskWorld(b)).returnLineId });
   },
@@ -724,6 +731,10 @@ export const UNIQUE_BUILDERS: Record<string, UniqueBuilder> = {
     const [da, db] = [await deskWorld(a), await deskWorld(b)];
     const cn = randomUUID();
     return twice(a, b, (o) => retLine(o, o === a ? wa : wb, o === a ? da : db, { credit_note_id: cn, line_key: 'same' }));
+  },
+  async desk_sale_bills_key(a, b) {
+    const billId = randomUUID();
+    return twice(a, b, (o, v) => saleBill(o, { bill_id: billId, patient_name: v === 'again' ? 'Other Patient' : 'Test Patient' }));
   },
   async staff_users_system_key(a, b) {
     return twice(a, b, async (o, v) => inTenant(o, `INSERT INTO staff_users (org_id, name, login, role_key, password_hash, active, system_kind)
