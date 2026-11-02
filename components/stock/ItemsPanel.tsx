@@ -97,30 +97,34 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
 
   /** D-58: an expired batch leaves for good (all of it at the premises), signed. */
   /** Delete: its stock goes to 0 (counted out, or written off from quarantine), then it leaves the list. History stays. */
-  const [deleting, setDeleting] = useState<{ password: string; error: string | null; busy: boolean } | null>(null);
+  // The delete dialog holds its own item: it opens after the item's sheet closes (a click in a dialog over an
+  // open sheet counts as outside the sheet and would close it mid-delete).
+  const [deleting, setDeleting] = useState<{ itemId: string; name: string; password: string; error: string | null; busy: boolean } | null>(null);
   /** D-64: Delete asks for the clinic's delete password (not the login password). */
   async function deleteItem() {
     if (!open) return;
     const qty = open.stock?.onHandBase ?? 0;
     if (!window.confirm(qty > 0 ? t.deleteConfirmStock(open.displayName, packs(qty, open.baseUnit, open.units)) : t.deleteConfirm(open.displayName))) return;
     setError(null);
-    setDeleting({ password: '', error: null, busy: false });
+    const target = { itemId: open.id, name: open.displayName };
+    setOpen(null);
+    setDeleting({ ...target, password: '', error: null, busy: false });
   }
   async function confirmDelete(e: FormEvent) {
     e.preventDefault();
-    if (!open || !deleting) return;
-    setDeleting({ ...deleting, busy: true, error: null });
-    let r = await api(`/api/dispensary/items/${open.id}`, { method: 'DELETE', body: { deletePassword: deleting.password } });
+    if (!deleting) return;
+    const d = deleting;
+    setDeleting({ ...d, busy: true, error: null });
+    let r = await api(`/api/dispensary/items/${d.itemId}`, { method: 'DELETE', body: { deletePassword: d.password } });
     if (r.body.code === 'reauth_required') {
       // No delete password set for this clinic: the login password confirms instead.
       setDeleting(null);
-      const grant = await withGrant('stock.adjust', open.id, { passwordOnly: true });
+      const grant = await withGrant('stock.adjust', d.itemId, { passwordOnly: true });
       if (!grant) return;
-      r = await api(`/api/dispensary/items/${open.id}`, { method: 'DELETE', grant });
+      r = await api(`/api/dispensary/items/${d.itemId}`, { method: 'DELETE', grant });
     }
-    if (!r.ok) return setDeleting((d) => (d ? { ...d, busy: false, password: '', error: r.body.error ?? en.settings.failed } : d));
+    if (!r.ok) return setDeleting({ ...d, busy: false, password: '', error: r.body.error ?? en.settings.failed });
     setDeleting(null);
-    setOpen(null);
     await load('');
   }
 
@@ -401,14 +405,17 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
               </div>
             )}
             {error && <p role="alert" className="text-small text-bad">{error}</p>}
+            {/* Inside the sheet, so a click in the password box is not a click outside the sheet. */}
+            {grantDialog}
           </div>
         )}
       </Sheet>
-      {grantDialog}
+      {!open && grantDialog}
       {deleting && (
         <div role="dialog" aria-modal="true" className="fixed inset-0 z-10 flex items-center justify-center bg-black/30 px-4">
           <form onSubmit={confirmDelete} className="w-full max-w-sm space-y-4 rounded-xl2 border border-hairline bg-surface p-6 shadow-card" noValidate>
             <h2 className="text-h2">{t.deletePasswordTitle}</h2>
+            <p className="text-small text-muted">{deleting.name}</p>
             <TextField label={t.deletePassword} type="password" autoFocus autoComplete="off" value={deleting.password}
               onChange={(ev) => setDeleting({ ...deleting, password: ev.target.value })} />
             {deleting.error && <p role="alert" className="rounded-xl2 bg-bad-wash px-3 py-2 text-small text-bad-ink">{deleting.error}</p>}
