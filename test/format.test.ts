@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fmtPaise } from '../lib/money';
-import { dmy, istDateTime, packs, unitWord } from '../components/stock/format';
+import { dmy, istDateTime, packs, unitName, unitWord } from '../components/stock/format';
 
 test('fmtPaise: rupees with Indian grouping and two decimals, from integer paise only', () => {
   assert.equal(fmtPaise(4500), '₹45.00');
@@ -25,7 +25,7 @@ test('packs: base units with the largest pack that fits alongside; plurals', () 
   assert.equal(packs(7, 'TABLET', strip), '7 tablets');
   assert.equal(packs(0, 'TABLET', strip), '0 tablets');
   const boxes = [{ name: 'box', baseUnitsPerUnit: 100, isBase: false, active: true }, { name: 'old box', baseUnitsPerUnit: 200, isBase: false, active: false }];
-  assert.equal(packs(250, 'PIECE', boxes), '2 boxes + 50 pieces', 'an inactive pack is not used');
+  assert.equal(packs(250, 'PIECE', boxes), '2 boxes + 50 units', 'an inactive pack is not used; a piece reads as a unit (032)');
   assert.equal(packs(60, 'G'), '60 g');
   const box = [{ name: 'strip', baseUnitsPerUnit: 10, isBase: false, active: true }, { name: 'box', baseUnitsPerUnit: 100, isBase: false, active: true }];
   assert.equal(packs(500, 'TABLET', box), '5 boxes');
@@ -39,4 +39,13 @@ test('IST display: DD-MM-YYYY HH:mm, and the day turns at 18:30 UTC', () => {
   assert.equal(istDateTime('2026-10-07T18:29:00Z'), '07-10-2026 23:59');
   assert.equal(istDateTime('2026-10-07T18:30:00Z'), '08-10-2026 00:00');
   assert.equal(dmy('2027-03-31'), '31-03-2027');
+});
+
+test('032 units (founder 2026-11-11): PIECE reads as "unit" everywhere; strips and bottles plural; ml and g stay plural-less', () => {
+  assert.deepEqual(['PIECE', 'piece', 'UNIT', 'STRIP', 'BOTTLE', 'ML'].map(unitName), ['unit', 'unit', 'unit', 'strip', 'bottle', 'ml']);
+  assert.equal(unitWord(1, 'PIECE'), '1 unit');
+  assert.equal(unitWord(5, 'PIECE'), '5 units');
+  assert.equal(unitWord(3, 'STRIP'), '3 strips');
+  assert.equal(unitWord(2, 'BOTTLE'), '2 bottles');
+  assert.equal(unitWord(30, 'ML'), '30 ml');
 });

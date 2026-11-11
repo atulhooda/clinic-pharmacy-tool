@@ -158,13 +158,15 @@ export async function deskItems(ctx: DeskContext): Promise<{ items: DeskItemView
            LEFT JOIN item_units u ON u.org_id = bt.org_id AND u.id = bt.mrp_unit_id
           WHERE b.org_id = $1 AND b.premises_id = $2
           GROUP BY b.item_id)
-       SELECT i.id, i.display_name AS "displayName", i.category, i.base_unit AS "baseUnit",
+       SELECT i.id, i.display_name AS "displayName", i.category,
+              -- 032: a PIECE item is a "unit" (founder 2026-11-11); its stored rows are not changed
+              CASE i.base_unit WHEN 'PIECE' THEN 'UNIT' ELSE i.base_unit END AS "baseUnit",
               coalesce(bal.on_hand, 0) AS "onHandBase", coalesce(bal.dispensable, 0) AS "dispensableBase",
               bal.max_mrp AS "maxMrpPaisePerBase", i.active,
               ${USE_FOR_SQL} AS "useFor", i.track_batches AS "trackBatches", i.requires_prescription AS "requiresPrescription",
               ${SCHEDULES_SQL} AS schedules,
               nullif(btrim(coalesce(i.hsn_code_override, m.hsn_code)), '') AS hsn,
-              (SELECT coalesce(jsonb_agg(jsonb_build_object('name', u.name, 'baseQty', u.base_units_per_unit)
+              (SELECT coalesce(jsonb_agg(jsonb_build_object('name', CASE WHEN u.is_base AND lower(u.name) = 'piece' THEN 'unit' ELSE u.name END, 'baseQty', u.base_units_per_unit)
                                          ORDER BY u.is_base DESC, u.base_units_per_unit, lower(u.name)), '[]'::jsonb)
                  FROM item_units u WHERE u.org_id = i.org_id AND u.item_id = i.id AND u.active AND u.dispensable) AS units
          FROM items i LEFT JOIN medicine_master m ON m.id = i.master_id LEFT JOIN bal ON bal.item_id = i.id

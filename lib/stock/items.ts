@@ -6,6 +6,7 @@ import { writeAudit } from '../audit';
 import { withSessionTx, type Session } from '../auth/guard';
 import { checkViolation, requirePremises } from './scope';
 import { itemStock, stockSummaries, type BatchView, type StockSummary } from './ledger';
+import { unitName } from './display';
 
 /**
  * The organisation's catalogue (06a §6.5; E-12 … E-17). One catalogue per business.
@@ -22,9 +23,12 @@ import { itemStock, stockSummaries, type BatchView, type StockSummary } from './
  *   changes an item's identity (R7-5); the items_freeze trigger guards it once stock has moved.
  */
 export type Category = 'MEDICINE' | 'RETAIL_PRODUCT' | 'INJECTABLE' | 'CONSUMABLE';
-export type BaseUnit = 'TABLET' | 'CAPSULE' | 'ML' | 'G' | 'VIAL' | 'UNIT' | 'PIECE';
+export type BaseUnit = 'TABLET' | 'CAPSULE' | 'STRIP' | 'BOTTLE' | 'ML' | 'G' | 'VIAL' | 'UNIT' | 'PIECE';
 export const CATEGORIES: readonly Category[] = ['MEDICINE', 'RETAIL_PRODUCT', 'INJECTABLE', 'CONSUMABLE'];
-export const BASE_UNITS: readonly BaseUnit[] = ['TABLET', 'CAPSULE', 'ML', 'G', 'VIAL', 'UNIT', 'PIECE'];
+export const BASE_UNITS: readonly BaseUnit[] = ['TABLET', 'CAPSULE', 'STRIP', 'BOTTLE', 'ML', 'G', 'VIAL', 'UNIT', 'PIECE'];
+/** What the screens OFFER for a new item (032, founder 2026-11-11): strips and bottles; no ml, no piece ("unit"). ML and
+ *  PIECE stay in BASE_UNITS so existing items (and older callers) keep working; PIECE shows as "unit". */
+export const NEW_ITEM_UNITS: readonly BaseUnit[] = ['TABLET', 'CAPSULE', 'STRIP', 'BOTTLE', 'G', 'VIAL', 'UNIT'];
 export const SCHEDULE_FLAGS = ['H', 'H1', 'X', 'G', 'NDPS', 'H2'] as const;
 export const STORAGE = ['ROOM_TEMPERATURE', 'BELOW_25C', 'BELOW_30C', 'COLD_2_8C', 'FROZEN'] as const;
 /** D-54: given to patients, used in the clinic during treatment, or both. */
@@ -223,7 +227,7 @@ export async function createItem(s: Session, input: ItemCreate): Promise<ItemDet
         input.customManufacturerAddress ?? null, input.hsnCodeOverride ?? null, input.storageCondition ?? null,
         input.reorderLevel ?? null, input.reorderQty ?? null, input.rackLocation ?? null, at, input.useFor ?? null, input.note?.trim() || null]).catch(uniqueConflict))[0];
     await db.rows(`INSERT INTO item_units (org_id, item_id, name, base_units_per_unit, is_base, created_at) VALUES ($1, $2, $3, 1, true, $4)`,
-      [s.orgId, item.id, input.baseUnit.toLowerCase(), at]);
+      [s.orgId, item.id, unitName(input.baseUnit), at]);
     await writeAudit(db, { orgId: s.orgId, action: 'item.created', actorLabel: s.name, actorRole: s.roleKey,
       staffUserId: s.staffUserId, sessionId: s.sid, deviceId: s.deviceId, entityId: item.id,
       detail: { kind: input.masterId ? 'master' : 'custom' } });

@@ -5,8 +5,13 @@
 export interface PackUnit { name: string; baseUnitsPerUnit: number; isBase: boolean; active: boolean }
 
 const PLURAL_LESS = new Set(['ml', 'g']);
-export function unitWord(n: number, unit: string): string {
+/** A unit as people read it: lower case, and PIECE is "unit" (032, founder 2026-11-11: "keep unit, not pieces"). */
+export function unitName(unit: string): string {
   const u = unit.toLowerCase();
+  return u === 'piece' ? 'unit' : u;
+}
+export function unitWord(n: number, unit: string): string {
+  const u = unitName(unit);
   if (n === 1 || n === -1 || PLURAL_LESS.has(u)) return `${n} ${u}`;
   return `${n} ${/(s|x|z|ch|sh)$/.test(u) ? `${u}es` : `${u}s`}`;
 }
