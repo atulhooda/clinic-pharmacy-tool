@@ -51,7 +51,9 @@ export async function issueGrant(
     const r = await verifyPin(input.pin, stored.signingPin);
     if (!r.ok) await wrongSecret(s, tries, 'signing_pin');
     if (r.stale) rehash = await hashPin(input.pin);
-  } else if (!(stored.password && (await verifyPassword(input.password!, stored.password)))) {
+  } else if (!(stored.password && (await verifyPassword(input.password!, stored.password)))
+    // D-68: the clinic's own password (ITEM_DELETE_PASSWORD_HASH, D-64) confirms too, so staff need remember only one.
+    && !(process.env.ITEM_DELETE_PASSWORD_HASH && (await verifyPassword(input.password!, process.env.ITEM_DELETE_PASSWORD_HASH)))) {
     await wrongSecret(s, tries, 'password');
   }
   const at = now();

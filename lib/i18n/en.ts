@@ -71,7 +71,7 @@ export const en = {
     pin: 'Signing PIN',
     usePassword: 'Use my password instead',
     usePin: 'Use my signing PIN',
-    password: 'Your login password',
+    password: 'Your login password, or the clinic password',
     submit: 'Confirm',
     cancel: 'Cancel',
     wrong: 'That is not right.',

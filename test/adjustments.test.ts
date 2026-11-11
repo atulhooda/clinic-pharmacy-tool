@@ -317,3 +317,17 @@ test('D-64: with a clinic delete password set, only it deletes (not the login pa
     setClockForTests(null);
   }
 });
+
+test('D-68: the clinic password confirms a signed action as well as the login password; a wrong one still counts', async () => {
+  const { hashPassword } = await import('../lib/auth/password');
+  process.env.ITEM_DELETE_PASSWORD_HASH = await hashPassword('synthetic-clinic-pass-2');
+  try {
+    const w = await stockWorld('adj15');
+    const ask = (password: string) => w.owner.call(reauthRoute, { body: { password, purpose: 'stock.adjust', entityId: w.main.id } });
+    assert.equal((await ask('synthetic-clinic-pass-2')).status, 201, 'the clinic password');
+    assert.equal((await ask(w.aa.password)).status, 201, 'the login password');
+    assert.equal((await ask('neither')).body.code, 'wrong_secret');
+  } finally {
+    delete process.env.ITEM_DELETE_PASSWORD_HASH;
+  }
+});
