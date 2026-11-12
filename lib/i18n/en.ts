@@ -336,7 +336,7 @@ export const en = {
     newItemUnit: 'Counted in',
     newItemPack: 'Pack (optional)',
     newItemPer: 'How many in one pack',
-    newItemHint: 'e.g. a strip of 10 tablets, a tube of 1 piece. The pack size cannot change later, so check it on the pack.',
+    newItemHint: 'e.g. a strip of 10 tablets, a bottle of 1 unit. The pack size cannot change later, so check it on the pack.',
     newItemSave: 'Add and use on this line',
     newItemMaker: 'Manufacturer (optional, from the pack)',
     newItemMakerAddress: 'Manufacturer address (optional)',

@@ -206,11 +206,11 @@ test('E-52 / D-66: every active item, any category or use, with on-hand, dispens
   assert.ok(!byId.has(removed.id), 'a removed item is still left out');
   const c = byId.get(cream.id)!;
   assert.deepEqual({ onHand: c.onHandBase, dispensable: c.dispensableBase, maxMrp: c.maxMrpPaisePerBase, category: c.category, baseUnit: c.baseUnit, active: c.active },
-    { onHand: 19, dispensable: 12, maxMrp: 101, category: 'RETAIL_PRODUCT', baseUnit: 'PIECE', active: true });
+    { onHand: 19, dispensable: 12, maxMrp: 101, category: 'RETAIL_PRODUCT', baseUnit: 'UNIT', active: true }); // 032: PIECE is sent as UNIT
   assert.equal(byId.get(both.id)!.maxMrpPaisePerBase, null, 'no stock: no MRP');
   assert.deepEqual([...[cream, both, clinicOnly, w.pcm, w.glv, inj].map((i) => byId.get(i.id)!.useFor)],
     ['PATIENTS', 'BOTH', 'IN_CLINIC', 'PATIENTS', 'IN_CLINIC', 'IN_CLINIC'], 'useFor resolved with the category default (D-54), never null');
-  assert.deepEqual(c.units, [{ name: 'piece', baseQty: 1 }, { name: 'pair', baseQty: 2 }, { name: 'box', baseQty: 10 }]);
+  assert.deepEqual(c.units, [{ name: 'unit', baseQty: 1 }, { name: 'pair', baseQty: 2 }, { name: 'box', baseQty: 10 }]);
   assert.deepEqual(byId.get(inj.id)!.units, [{ name: 'vial', baseQty: 1 }]);
   const g = byId.get(w.glv.id)!;
   assert.deepEqual([g.trackBatches, g.dispensableBase, g.maxMrpPaisePerBase], [false, 40, null], 'untracked: its store balance is dispensable, and it has no MRP');

@@ -14,7 +14,7 @@ import { IconPlus } from '@/components/ui/icons';
 import { en } from '@/lib/i18n/en';
 import { fmtPaise } from '@/lib/money';
 import { api } from '@/components/settings/client';
-import { dmy, istDateTime, movementLabel, packs, unitWord } from './format';
+import { dmy, istDateTime, movementLabel, packs, unitName, unitWord } from './format';
 import { AdjustStockSheet } from './AdjustStockSheet';
 import { BatchDetailsSheet, type PendingStock } from './BatchDetailsSheet';
 import { useGrant } from '@/components/settings/useGrant';
@@ -33,7 +33,10 @@ type Movement = { id: string; type: string; qtyDelta: number; locationName: stri
 type StockFilter = 'ALL' | 'LOW' | 'NEAR' | 'EXPIRED';
 type Master = { id: string; brandName: string; dosageForm: string; suggestedBaseUnit: string | null; salts: { name: string }[] };
 const CATEGORIES = ['MEDICINE', 'RETAIL_PRODUCT', 'INJECTABLE', 'CONSUMABLE'];
-const BASE_UNITS = ['TABLET', 'CAPSULE', 'ML', 'G', 'VIAL', 'UNIT', 'PIECE'];
+// What a NEW item may be counted in (032; = lib/stock/items.ts NEW_ITEM_UNITS): strips and bottles, no ml, no piece.
+const BASE_UNITS = ['TABLET', 'CAPSULE', 'STRIP', 'BOTTLE', 'G', 'VIAL', 'UNIT'];
+/** The master's suggestion as a unit a new item may use: ml (a liquid) → bottle, piece → unit, anything unknown → tablet. */
+const newItemUnit = (u: string | null): string => (u === 'ML' ? 'BOTTLE' : u === 'PIECE' ? 'UNIT' : u && BASE_UNITS.includes(u) ? u : 'TABLET');
 const FLAGS = ['H', 'H1', 'X', 'G', 'NDPS', 'H2'];
 const USES: UseFor[] = ['PATIENTS', 'IN_CLINIC', 'BOTH'];
 /** D-54: what an item is for when nobody has chosen (the server's default too). */
@@ -158,7 +161,7 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
     const [kind, id] = v.split(':');
     if (kind === 'item') { setAdding(false); void reopen(id); return; }
     const m = masters.find((x) => x.id === id);
-    if (m) setDraft({ ...draft, masterId: m.id, displayName: m.brandName, category: 'MEDICINE', baseUnit: m.suggestedBaseUnit ?? 'TABLET' });
+    if (m) setDraft({ ...draft, masterId: m.id, displayName: m.brandName, category: 'MEDICINE', baseUnit: newItemUnit(m.suggestedBaseUnit) });
   }
   async function create(e: FormEvent) {
     e.preventDefault();
@@ -238,7 +241,7 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
       <div className="card overflow-hidden">
         <DataList rows={shown} rowKey={(i) => i.id} empty={items.length ? 'No item matches.' : 'No items yet. Add the first one.'} onRowClick={(i) => reopen(i.id)} columns={[
           { key: 'name', header: 'Item', primary: true, cell: (i) => (
-            <span><span className="block font-semibold text-ink">{i.displayName}{!i.active && <> <Badge tone="bad">{t.removedBadge}</Badge></>}</span><span className="block text-micro text-muted">{label(i.category)} · {i.baseUnit.toLowerCase()}{use === 'ALL' ? ` · ${t.use[i.useFor]}` : ''}</span>
+            <span><span className="block font-semibold text-ink">{i.displayName}{!i.active && <> <Badge tone="bad">{t.removedBadge}</Badge></>}</span><span className="block text-micro text-muted">{label(i.category)} · {unitName(i.baseUnit)}{use === 'ALL' ? ` · ${t.use[i.useFor]}` : ''}</span>
             {i.note && <span className="block text-micro font-medium text-warn">{i.note}</span>}</span>) },
           { key: 'balance', header: t.balance, align: 'right', cell: (i) => (
             <span className="block text-right">
@@ -276,7 +279,7 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
               {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
             </SelectField>
             <SelectField label={t.baseUnit} value={draft.baseUnit} onChange={(e) => setDraft({ ...draft, baseUnit: e.target.value })}>
-              {BASE_UNITS.map((c) => <option key={c}>{c}</option>)}
+              {BASE_UNITS.map((c) => <option key={c} value={c}>{unitName(c)}</option>)}
             </SelectField>
             <SelectField label={t.useFor} hint={t.useForHint} value={draft.useFor} onChange={(e) => setDraft({ ...draft, useFor: e.target.value as UseFor })}>
               {USES.map((u) => <option key={u} value={u}>{t.use[u]}</option>)}
@@ -380,7 +383,7 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
               <ul className="divide-y divide-hairline">
                 {(open.units ?? []).map((u) => (
                   <li key={u.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-small">
-                    <span>{u.name} = {u.baseUnitsPerUnit} {open.baseUnit.toLowerCase()}</span>
+                    <span>{u.name} = {u.baseUnitsPerUnit} {unitName(open.baseUnit)}</span>
                     <span className="flex gap-3">
                       <label className="flex items-center gap-1"><input type="checkbox" disabled={!canEdit} checked={u.dispensable} onChange={(e) => unitFlag(u, { dispensable: e.target.checked })} /> {t.dispensable}</label>
                       <label className="flex items-center gap-1"><input type="checkbox" disabled={!canEdit} checked={u.purchasable} onChange={(e) => unitFlag(u, { purchasable: e.target.checked })} /> {t.purchasable}</label>

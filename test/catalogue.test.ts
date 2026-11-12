@@ -324,6 +324,18 @@ test('E-13 / E-14 / DX-39 / DX-40: items are created with their base unit, are p
   assert.equal(page2.body.nextCursor, null);
 });
 
+test('032 units (founder 2026-11-11): an item may be counted in strips or bottles; a new piece item\'s base pack is called "unit"; an unknown unit is refused', async () => {
+  const A = await world('u032');
+  const strips = await A.owner.call(itemsPost, { body: custom('Strip-only tablets', { baseUnit: 'STRIP' }) });
+  const syrup = await A.owner.call(itemsPost, { body: custom('Cough syrup', { baseUnit: 'BOTTLE' }) });
+  const gloves = await A.owner.call(itemsPost, { body: { category: 'CONSUMABLE', displayName: 'Gloves', baseUnit: 'PIECE', trackBatches: false } });
+  const names = (r: { body: Record<string, any> }) => (r.body.units as { name: string }[]).map((u) => u.name); // eslint-disable-line @typescript-eslint/no-explicit-any
+  assert.deepEqual([strips.status, strips.body.baseUnit, names(strips)], [201, 'STRIP', ['strip']]);
+  assert.deepEqual([syrup.status, syrup.body.baseUnit, names(syrup)], [201, 'BOTTLE', ['bottle']]);
+  assert.deepEqual([gloves.status, names(gloves)], [201, ['unit']]);
+  assert.equal((await A.owner.call(itemsPost, { body: custom('Bad unit', { baseUnit: 'JAR' }) })).status, 422);
+});
+
 test('E-15 / DX-41: editing changes everything but identity; another organisation\'s item is 404 and unchanged', async () => {
   const A = await world('dx41a');
   const B = await world('dx41b');

@@ -8,7 +8,7 @@ import { TextField, SelectField } from '@/components/ui/Field';
 import { IconPrint } from '@/components/ui/icons';
 import { en } from '@/lib/i18n/en';
 import { api } from '@/components/settings/client';
-import { packs, type PackUnit } from './format';
+import { packs, unitName, type PackUnit } from './format';
 import { usePremises } from './catalogue';
 
 const t = en.statement;
@@ -77,7 +77,7 @@ export function StatementPanel() {
       <div className="card overflow-hidden">
         <DataList rows={rows} rowKey={(r) => r.itemId} empty={t.empty} columns={[
           { key: 'item', header: t.item, primary: true, cell: (r) => (
-            <span><span className="block font-semibold text-ink">{r.name}</span><span className="block text-micro text-muted">{r.baseUnit.toLowerCase()}</span></span>) },
+            <span><span className="block font-semibold text-ink">{r.name}</span><span className="block text-micro text-muted">{unitName(r.baseUnit)}</span></span>) },
           { key: 'opening', header: t.opening, align: 'right', cell: (r) => num(r.opening) },
           { key: 'received', header: t.received, align: 'right', cell: (r) => num(r.received) },
           { key: 'issued', header: t.issued, align: 'right', cell: (r) => num(r.issued) },

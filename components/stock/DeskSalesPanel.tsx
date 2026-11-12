@@ -7,7 +7,7 @@ import DataList from '@/components/ui/DataList';
 import { api, newIdempotencyKey } from '@/components/settings/client';
 import { useGrant } from '@/components/settings/useGrant';
 import { en } from '@/lib/i18n/en';
-import { deskBillParty } from '@/lib/stock/display';
+import { deskBillParty, unitName } from '@/lib/stock/display';
 
 const t = en.deskSales;
 type State = 'TAKEN' | 'PART_RETURNED' | 'RETURNED' | 'SHORT' | 'REJECTED' | 'CANCELLED';
@@ -131,7 +131,7 @@ export function DeskSalesPanel({ canResolve }: { canResolve: boolean }) {
                   </span>)}
               </span>) },
             { key: 'qty', header: t.qty, align: 'right', cell: (r) => (
-              <span className="block text-right"><span className="block tnum">{r.qtyBase} {r.baseUnit?.toLowerCase() ?? ''}</span>
+              <span className="block text-right"><span className="block tnum">{r.qtyBase} {r.baseUnit ? unitName(r.baseUnit) : ''}</span>
                 {r.returnedBase > 0 && <span className="block text-micro text-muted">{t.returned} {r.returnedBase}</span>}</span>) },
             { key: 'batch', header: t.batch, cell: (r) => <span className="text-small text-muted">{r.batches ?? '—'}</span> },
             { key: 'status', header: t.status, cell: status },

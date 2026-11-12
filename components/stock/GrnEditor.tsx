@@ -13,7 +13,9 @@ import { IconPlus } from '@/components/ui/icons';
 import { en } from '@/lib/i18n/en';
 import { fmtPaise } from '@/lib/money';
 import { api, newIdempotencyKey } from '@/components/settings/client';
-import { dmy, istDateTime, parseRupees, unitWord } from './format';
+import { dmy, istDateTime, parseRupees, unitName, unitWord } from './format';
+// = lib/stock/items.ts NEW_ITEM_UNITS (032): strips and bottles, no ml, no piece.
+const NEW_ITEM_UNITS = ['TABLET', 'CAPSULE', 'STRIP', 'BOTTLE', 'G', 'VIAL', 'UNIT'];
 import { itemOption, rupeesText, useItems, useSuppliers, type Unit } from './catalogue';
 import { makerOnPick, needsManufacturer, type Problem } from '@/lib/stock/receipt-rules';
 import { onFile, screenChecks, type ApiLine, type Form, type Grn, type Maker } from './grn-checks';
@@ -228,7 +230,7 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
                     <TextField label={t.newItemName} value={adding.name} maxLength={120} autoFocus onChange={(e) => setAdding({ ...adding, name: e.target.value })} />
                     <div className="grid grid-cols-2 gap-3">
                       <SelectField label={t.newItemType} value={adding.category} onChange={(e) => {
-                        const c = e.target.value; setAdding({ ...adding, category: c, ...(c === 'MEDICINE' ? { baseUnit: 'TABLET', pack: 'strip', per: '10' } : { baseUnit: 'PIECE', pack: '', per: '' }) });
+                        const c = e.target.value; setAdding({ ...adding, category: c, ...(c === 'MEDICINE' ? { baseUnit: 'TABLET', pack: 'strip', per: '10' } : { baseUnit: 'UNIT', pack: '', per: '' }) });
                       }}>
                         <option value="MEDICINE">{t.typeMedicine}</option>
                         <option value="RETAIL_PRODUCT">{t.typeRetail}</option>
@@ -236,7 +238,7 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
                         <option value="CONSUMABLE">{t.typeConsumable}</option>
                       </SelectField>
                       <SelectField label={t.newItemUnit} value={adding.baseUnit} onChange={(e) => setAdding({ ...adding, baseUnit: e.target.value })}>
-                        {['TABLET', 'CAPSULE', 'PIECE', 'ML', 'G', 'VIAL', 'UNIT'].map((u) => <option key={u} value={u}>{u.toLowerCase()}</option>)}
+                        {NEW_ITEM_UNITS.map((u) => <option key={u} value={u}>{unitName(u)}</option>)}
                       </SelectField>
                       <TextField label={t.newItemPack} placeholder="strip, box, bottle…" value={adding.pack} maxLength={40} onChange={(e) => setAdding({ ...adding, pack: e.target.value })} />
                       <TextField label={t.newItemPer} inputMode="numeric" value={adding.per} onChange={(e) => setAdding({ ...adding, per: e.target.value.replace(/\D/g, '') })} />
