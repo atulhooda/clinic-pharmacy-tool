@@ -241,7 +241,7 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
       <div className="card overflow-hidden">
         <DataList rows={shown} rowKey={(i) => i.id} empty={items.length ? 'No item matches.' : 'No items yet. Add the first one.'} onRowClick={(i) => reopen(i.id)} columns={[
           { key: 'name', header: 'Item', primary: true, cell: (i) => (
-            <span><span className="block font-semibold text-ink">{i.displayName}{!i.active && <> <Badge tone="bad">{t.removedBadge}</Badge></>}</span><span className="block text-micro text-muted">{label(i.category)} · {unitName(i.baseUnit)}{use === 'ALL' ? ` · ${t.use[i.useFor]}` : ''}</span>
+            <span><span className="block font-semibold text-ink">{i.displayName}{!i.active && <> <Badge tone="bad">{t.removedBadge}</Badge></>}</span><span className="block text-micro text-muted">{label(i.category)}{use === 'ALL' ? ` · ${t.use[i.useFor]}` : ''}</span>
             {i.note && <span className="block text-micro font-medium text-warn">{i.note}</span>}</span>) },
           { key: 'balance', header: t.balance, align: 'right', cell: (i) => (
             <span className="block text-right">

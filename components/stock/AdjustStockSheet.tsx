@@ -44,7 +44,9 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
   useEffect(() => {
     if (!item) return;
     setError(null); setCount(''); setNote(''); setReason('COUNT_CORRECTION'); setKey(newIdempotencyKey()); setEditing(false);
-    setUnitId((item.units ?? []).find((u) => u.isBase)?.id ?? '');
+    // Count in the item's pack (strip, tube, bottle) when it has one: the clinic counts the shelf in packs.
+    const packUnit = (item.units ?? []).filter((u) => !u.isBase && u.active).sort((a, b) => a.baseUnitsPerUnit - b.baseUnitsPerUnit)[0];
+    setUnitId(packUnit?.id ?? (item.units ?? []).find((u) => u.isBase)?.id ?? '');
     void api<{ items: Premises[] }>('/api/dispensary/premises').then((r) => {
       const ready = r.ok ? r.body.items.filter((p) => p.settings) : [];
       setPremises(ready);
