@@ -399,12 +399,10 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
                 </form>
               )}
             </div>
-            {canEdit && (
+            {/* One Delete, at the top. A deleted item (seen under "Show removed") can be put back here. */}
+            {canEdit && !open.active && (
               <div className="border-t border-hairline pt-4">
-                {open.active
-                  ? <Button onClick={() => void deleteItem()}>{t.delete}</Button>
-                  : <Button onClick={() => void patch({ active: true })}>{t.putBack}</Button>}
-                <p className="mt-1 text-micro text-muted">{t.removeHint}</p>
+                <Button onClick={() => void patch({ active: true })}>{t.putBack}</Button>
               </div>
             )}
             {error && <p role="alert" className="text-small text-bad">{error}</p>}
