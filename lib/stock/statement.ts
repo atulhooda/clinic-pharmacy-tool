@@ -90,7 +90,9 @@ export async function stockStatement(s: Session, q: URLSearchParams): Promise<St
             coalesce(t.returned, 0) AS returned, coalesce(t.other, 0) AS other, coalesce(t.balance, 0) AS balance,
             coalesce(t.quarantined, 0) AS quarantined
        FROM items i LEFT JOIN t ON t.item_id = i.id
-      WHERE i.org_id = $1 AND ($5 OR coalesce(t.moved, false) OR coalesce(t.balance, 0) <> 0)
+      -- A removed item leaves the statement once it holds nothing (the clinic: "if it's removed it should not show");
+      -- one that still holds stock stays, so no stock is ever hidden.
+      WHERE i.org_id = $1 AND (i.active OR coalesce(t.balance, 0) <> 0) AND ($5 OR coalesce(t.moved, false) OR coalesce(t.balance, 0) <> 0)
       ORDER BY lower(i.display_name), i.id`,
     [s.orgId, premises, istStart(from), istStart(addDays(to, 1)), all]));
   const units = rows.length ? await withTenant(s.orgId, (db) => db.rows<{ itemId: string; name: string; baseUnitsPerUnit: number; isBase: boolean; active: boolean }>(

@@ -402,7 +402,7 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
             {canEdit && (
               <div className="border-t border-hairline pt-4">
                 {open.active
-                  ? <Button onClick={() => { if (window.confirm(t.removeConfirm)) void patch({ active: false }); }}>{t.remove}</Button>
+                  ? <Button onClick={() => void deleteItem()}>{t.delete}</Button>
                   : <Button onClick={() => void patch({ active: true })}>{t.putBack}</Button>}
                 <p className="mt-1 text-micro text-muted">{t.removeHint}</p>
               </div>
