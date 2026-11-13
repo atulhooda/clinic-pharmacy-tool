@@ -55,7 +55,12 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
   }, [item]);
 
   const tracked = item?.trackBatches ?? true;
-  const batches = (item?.stock?.batches ?? []).filter((b) => b.premisesId === premisesId);
+  // A count is of the shelf: only batches with shelf stock (never ones held in quarantine), the fullest first,
+  // so the default is the batch the stock is on (a count once landed on an old expired batch of the same number).
+  const shelfQty = (b: Batch) => b.locations.filter((l) => l.kind !== 'QUARANTINE').reduce((n, l) => n + l.onHandBase, 0);
+  const batches = (item?.stock?.batches ?? [])
+    .filter((b) => b.premisesId === premisesId && (b.detailsPending || !b.locations.length || b.locations.some((l) => l.kind !== 'QUARANTINE')) && !(b.expired && shelfQty(b) === 0))
+    .sort((x, y) => shelfQty(y) - shelfQty(x));
   useEffect(() => { setBatchId(batches[0]?.id ?? NEW); }, [premisesId, item]); // eslint-disable-line react-hooks/exhaustive-deps
   // A new batch: fill its details from the newest bill of this item, so usually only the quantity is typed.
   useEffect(() => {
