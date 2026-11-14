@@ -34,7 +34,7 @@ type StockFilter = 'ALL' | 'LOW' | 'NEAR' | 'EXPIRED';
 type Master = { id: string; brandName: string; dosageForm: string; suggestedBaseUnit: string | null; salts: { name: string }[] };
 const CATEGORIES = ['MEDICINE', 'RETAIL_PRODUCT', 'INJECTABLE', 'CONSUMABLE'];
 // What a NEW item may be counted in (032; = lib/stock/items.ts NEW_ITEM_UNITS): strips and bottles, no ml, no piece.
-const BASE_UNITS = ['TABLET', 'CAPSULE', 'STRIP', 'BOTTLE', 'G', 'VIAL', 'UNIT'];
+const BASE_UNITS = ['STRIP', 'BOTTLE', 'TUBE', 'UNIT']; // D-69
 /** The master's suggestion as a unit a new item may use: ml (a liquid) → bottle, piece → unit, anything unknown → tablet. */
 const newItemUnit = (u: string | null): string => (u === 'ML' ? 'BOTTLE' : u === 'PIECE' ? 'UNIT' : u && BASE_UNITS.includes(u) ? u : 'TABLET');
 const FLAGS = ['H', 'H1', 'X', 'G', 'NDPS', 'H2'];

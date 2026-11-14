@@ -23,12 +23,13 @@ import { unitName } from './display';
  *   changes an item's identity (R7-5); the items_freeze trigger guards it once stock has moved.
  */
 export type Category = 'MEDICINE' | 'RETAIL_PRODUCT' | 'INJECTABLE' | 'CONSUMABLE';
-export type BaseUnit = 'TABLET' | 'CAPSULE' | 'STRIP' | 'BOTTLE' | 'ML' | 'G' | 'VIAL' | 'UNIT' | 'PIECE';
+export type BaseUnit = 'TABLET' | 'CAPSULE' | 'STRIP' | 'BOTTLE' | 'TUBE' | 'ML' | 'G' | 'VIAL' | 'UNIT' | 'PIECE';
 export const CATEGORIES: readonly Category[] = ['MEDICINE', 'RETAIL_PRODUCT', 'INJECTABLE', 'CONSUMABLE'];
-export const BASE_UNITS: readonly BaseUnit[] = ['TABLET', 'CAPSULE', 'STRIP', 'BOTTLE', 'ML', 'G', 'VIAL', 'UNIT', 'PIECE'];
+export const BASE_UNITS: readonly BaseUnit[] = ['TABLET', 'CAPSULE', 'STRIP', 'BOTTLE', 'TUBE', 'ML', 'G', 'VIAL', 'UNIT', 'PIECE'];
 /** What the screens OFFER for a new item (032, founder 2026-11-11): strips and bottles; no ml, no piece ("unit"). ML and
  *  PIECE stay in BASE_UNITS so existing items (and older callers) keep working; PIECE shows as "unit". */
-export const NEW_ITEM_UNITS: readonly BaseUnit[] = ['TABLET', 'CAPSULE', 'STRIP', 'BOTTLE', 'G', 'VIAL', 'UNIT'];
+// D-69 (033): the clinic counts only strips, bottles, tubes and units.
+export const NEW_ITEM_UNITS: readonly BaseUnit[] = ['STRIP', 'BOTTLE', 'TUBE', 'UNIT'];
 export const SCHEDULE_FLAGS = ['H', 'H1', 'X', 'G', 'NDPS', 'H2'] as const;
 export const STORAGE = ['ROOM_TEMPERATURE', 'BELOW_25C', 'BELOW_30C', 'COLD_2_8C', 'FROZEN'] as const;
 /** D-54: given to patients, used in the clinic during treatment, or both. */

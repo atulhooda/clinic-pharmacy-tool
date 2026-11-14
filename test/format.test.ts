@@ -49,3 +49,13 @@ test('032 units (founder 2026-11-11): PIECE reads as "unit" everywhere; strips a
   assert.equal(unitWord(2, 'BOTTLE'), '2 bottles');
   assert.equal(unitWord(30, 'ML'), '30 ml');
 });
+
+test('D-69 countUnits: strips, bottles, tubes and units only; a tablet, ml or g base and a box beside a strip are not offered', async () => {
+  const { countUnits } = await import('../lib/stock/display');
+  const u = (name: string, baseUnitsPerUnit: number, isBase = false, active = true) => ({ name, baseUnitsPerUnit, isBase, active });
+  assert.deepEqual(countUnits([u('tablet', 1, true), u('strip', 10), u('box', 100)]).map((x) => x.name), ['strip']);
+  assert.deepEqual(countUnits([u('ml', 1, true), u('bottle', 100)]).map((x) => x.name), ['bottle']);
+  assert.deepEqual(countUnits([u('capsule', 1, true), u('box', 10)]).map((x) => x.name), ['box'], 'a box with no strip stays');
+  assert.deepEqual(countUnits([u('piece', 1, true)]).map((x) => x.name), ['piece'], 'a unit item counts in units');
+  assert.deepEqual(countUnits([u('tablet', 1, true)]).map((x) => x.name), ['tablet'], 'no pack yet: the base is all there is');
+});

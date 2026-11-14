@@ -8,7 +8,7 @@ import { useGrant } from '@/components/settings/useGrant';
 import { api, newIdempotencyKey } from '@/components/settings/client';
 import { en } from '@/lib/i18n/en';
 import { fmtPaise } from '@/lib/money';
-import { dmy, packs, parseRupees, unitWord } from './format';
+import { countUnits, dmy, packs, parseRupees, unitWord } from './format';
 
 const t = en.stock.adjust;
 type Unit = { id: string; name: string; baseUnitsPerUnit: number; isBase: boolean; active: boolean };
@@ -76,7 +76,7 @@ export function AdjustStockSheet({ item, onClose, onDone }: { item: AdjustItem |
   }, [item, premisesId]);
   if (!item) return null;
 
-  const units = (item.units ?? []).filter((u) => u.active);
+  const units = countUnits(item.units ?? []); // D-69: strips, bottles, tubes, units
   const factor = units.find((u) => u.id === unitId)?.baseUnitsPerUnit ?? 1;
   const n = /^\d+$/.test(count.trim()) ? Number(count.trim()) : null;
   const countedBase = n === null ? null : n * factor;

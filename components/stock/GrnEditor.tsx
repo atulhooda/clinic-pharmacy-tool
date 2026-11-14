@@ -13,9 +13,9 @@ import { IconPlus } from '@/components/ui/icons';
 import { en } from '@/lib/i18n/en';
 import { fmtPaise } from '@/lib/money';
 import { api, newIdempotencyKey } from '@/components/settings/client';
-import { dmy, istDateTime, parseRupees, unitName, unitWord } from './format';
+import { dmy, istDateTime, parseRupees, unitName, unitWord, countUnits } from './format';
 // = lib/stock/items.ts NEW_ITEM_UNITS (032): strips and bottles, no ml, no piece.
-const NEW_ITEM_UNITS = ['TABLET', 'CAPSULE', 'STRIP', 'BOTTLE', 'G', 'VIAL', 'UNIT'];
+const NEW_ITEM_UNITS = ['STRIP', 'BOTTLE', 'TUBE', 'UNIT']; // D-69
 import { itemOption, rupeesText, useItems, useSuppliers, type Unit } from './catalogue';
 import { makerOnPick, needsManufacturer, type Problem } from '@/lib/stock/receipt-rules';
 import { onFile, screenChecks, type ApiLine, type Form, type Grn, type Maker } from './grn-checks';
@@ -75,7 +75,7 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
     const was = prev(key);
     if (!itemId) return setLines((ls) => ls.map((l) => (l.key === key ? { ...l, itemId: null, purchaseUnitId: null, mrpUnitId: null, ...makerOnPick(l, was, null) } : l)));
     const us = await loadUnits(itemId);
-    const buy = us.filter((u) => u.purchasable && u.active).sort((a, b) => b.baseUnitsPerUnit - a.baseUnitsPerUnit)[0] ?? us[0];
+    const buy = countUnits(us).filter((u) => u.purchasable).sort((a, b) => b.baseUnitsPerUnit - a.baseUnitsPerUnit)[0] ?? us[0];
     const next = made ?? onFile(itemById.get(itemId));
     setLines((ls) => ls.map((l) => (l.key === key ? { ...l, itemId, purchaseUnitId: buy?.id ?? null, mrpUnitId: buy?.id ?? null, ...makerOnPick(l, was, next) } : l)));
   }
@@ -230,7 +230,7 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
                     <TextField label={t.newItemName} value={adding.name} maxLength={120} autoFocus onChange={(e) => setAdding({ ...adding, name: e.target.value })} />
                     <div className="grid grid-cols-2 gap-3">
                       <SelectField label={t.newItemType} value={adding.category} onChange={(e) => {
-                        const c = e.target.value; setAdding({ ...adding, category: c, ...(c === 'MEDICINE' ? { baseUnit: 'TABLET', pack: 'strip', per: '10' } : { baseUnit: 'UNIT', pack: '', per: '' }) });
+                        const c = e.target.value; setAdding({ ...adding, category: c, ...(c === 'MEDICINE' ? { baseUnit: 'STRIP', pack: '', per: '' } : { baseUnit: 'UNIT', pack: '', per: '' }) });
                       }}>
                         <option value="MEDICINE">{t.typeMedicine}</option>
                         <option value="RETAIL_PRODUCT">{t.typeRetail}</option>
@@ -262,11 +262,11 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
                     <div className="mt-1"><Combobox items={itemOpts} value={l.itemId} onChange={(v) => void pickItem(l.key, v)} placeholder={t.pickItem} emptyText={t.noItem} /></div>
                     {adding?.key !== l.key && (
                       <button type="button" className="mt-1 text-small font-semibold text-brand"
-                        onClick={() => setAdding({ key: l.key, name: '', category: 'MEDICINE', baseUnit: 'TABLET', pack: 'strip', per: '10', mfrName: '', mfrAddress: '', busy: false })}>{t.newItem}</button>
+                        onClick={() => setAdding({ key: l.key, name: '', category: 'MEDICINE', baseUnit: 'STRIP', pack: '', per: '', mfrName: '', mfrAddress: '', busy: false })}>{t.newItem}</button>
                     )}
                   </div>
                   <SelectField label={t.pack} value={l.purchaseUnitId ?? ''} onChange={(e) => set(l.key, { purchaseUnitId: e.target.value })}>
-                    {us.filter((u) => u.active).map((u) => <option key={u.id} value={u.id}>{u.isBase ? u.name : `${u.name} of ${u.baseUnitsPerUnit}`}</option>)}
+                    {countUnits(us).map((u) => <option key={u.id} value={u.id}>{u.isBase ? u.name : `${u.name} of ${u.baseUnitsPerUnit}`}</option>)}
                   </SelectField>
                   <TextField label={t.qty} inputMode="numeric" value={l.qty} onChange={(e) => set(l.key, { qty: e.target.value.replace(/\D/g, '') })} />
                   <TextField label={t.free} inputMode="numeric" value={l.freeQty} onChange={(e) => set(l.key, { freeQty: e.target.value.replace(/\D/g, '') })} />
@@ -276,7 +276,7 @@ export function GrnEditor({ id, canEdit }: { id: string; canEdit: boolean }) {
                   <TextField label={t.expiry} value={l.expiry} placeholder="MM/YYYY" maxLength={10} onChange={(e) => set(l.key, { expiry: e.target.value })} />
                   <TextField label={t.mrp} inputMode="decimal" value={l.mrp} onChange={(e) => set(l.key, { mrp: e.target.value })} />
                   <SelectField label={t.mrpPer} value={l.mrpUnitId ?? l.purchaseUnitId ?? ''} onChange={(e) => set(l.key, { mrpUnitId: e.target.value })}>
-                    {us.filter((u) => u.active).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                    {countUnits(us).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
                   </SelectField>
                   <TextField label={t.rate} inputMode="decimal" value={l.rate} onChange={(e) => set(l.key, { rate: e.target.value })} />
                   <TextField label={t.discount} inputMode="decimal" value={l.discount} onChange={(e) => set(l.key, { discount: e.target.value })} />

@@ -7,7 +7,7 @@ import { TextField, SelectField } from '@/components/ui/Field';
 import { useGrant } from '@/components/settings/useGrant';
 import { api, newIdempotencyKey } from '@/components/settings/client';
 import { en } from '@/lib/i18n/en';
-import { parseRupees, unitWord } from './format';
+import { parseRupees, unitWord, countUnits } from './format';
 
 const t = en.stock.details;
 type Unit = { id: string; name: string; baseUnitsPerUnit: number; isBase: boolean; active: boolean };
@@ -29,12 +29,14 @@ export function BatchDetailsSheet({ stock, onClose, onDone }: { stock: PendingSt
 
   useEffect(() => {
     if (!stock) return;
-    const units = stock.units.filter((u) => u.active);
+    const units = countUnits(stock.units);
     const pack = units.filter((u) => !u.isBase).sort((a, b) => b.baseUnitsPerUnit - a.baseUnitsPerUnit)[0];
     const base = units.find((u) => u.isBase);
     // Count in the pack when the pending stock is whole packs, else in the base unit.
-    const countUnit = pack && stock.pendingBase % pack.baseUnitsPerUnit === 0 ? pack : base;
-    setF({ batchNo: '', expiry: '', mrp: '', mrpUnitId: (pack ?? base)?.id ?? '', count: String(stock.pendingBase / (countUnit?.baseUnitsPerUnit ?? 1)), unitId: countUnit?.id ?? '' });
+    // D-69: when the base unit is not offered (tablets, ml, g), count whole packs.
+    const countUnit = pack && (stock.pendingBase % pack.baseUnitsPerUnit === 0 || !base) ? pack : base;
+    const per = countUnit?.baseUnitsPerUnit ?? 1;
+    setF({ batchNo: '', expiry: '', mrp: '', mrpUnitId: (pack ?? base)?.id ?? '', count: String(Math.floor(stock.pendingBase / per)), unitId: countUnit?.id ?? '' });
     setError(null); setKey(newIdempotencyKey());
     if (stock.from) {
       const e = stock.from.expiry;
@@ -50,7 +52,7 @@ export function BatchDetailsSheet({ stock, onClose, onDone }: { stock: PendingSt
   }, [stock]);
   if (!stock) return null;
 
-  const units = stock.units.filter((u) => u.active);
+  const units = countUnits(stock.units);
   const factor = units.find((u) => u.id === f.unitId)?.baseUnitsPerUnit ?? 1;
   const qtyBase = /^\d+$/.test(f.count.trim()) ? Number(f.count.trim()) * factor : null;
 

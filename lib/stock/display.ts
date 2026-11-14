@@ -6,6 +6,18 @@ export interface PackUnit { name: string; baseUnitsPerUnit: number; isBase: bool
 
 const PLURAL_LESS = new Set(['ml', 'g']);
 /** A unit as people read it: lower case, and PIECE is "unit" (032, founder 2026-11-11: "keep unit, not pieces"). */
+/**
+ * D-69: the units a person counts or prices in. The clinic counts strips, bottles, tubes and units: a
+ * tablet, capsule, ml or g base unit is offered only when the item has no pack, and a box only when it has no strip.
+ */
+export function countUnits<U extends PackUnit>(units: readonly U[]): U[] {
+  const active = units.filter((u) => u.active);
+  const packs = active.filter((u) => !u.isBase && u.baseUnitsPerUnit > 1);
+  const hasStrip = packs.some((u) => /strip/i.test(u.name));
+  const shown = active.filter((u) => (u.isBase ? packs.length === 0 || !/^(tablet|capsule|ml|g)$/i.test(u.name) : !(hasStrip && /box/i.test(u.name))));
+  return shown.length ? shown : active;
+}
+
 export function unitName(unit: string): string {
   const u = unit.toLowerCase();
   return u === 'piece' ? 'unit' : u;
