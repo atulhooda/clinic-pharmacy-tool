@@ -2,7 +2,8 @@
 // category's default until someone chooses; the Stock list filters by it, BOTH in each list.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createItem, stockWorld } from './harness/stock';
+import { createItem, post, stockWorld } from './harness/stock';
+import { PATCH as unitPatch } from '../app/api/dispensary/items/[id]/units/[unitId]/route';
 import { GET as itemsGet } from '../app/api/dispensary/items/route';
 import { GET as itemGet, PATCH as itemPatch } from '../app/api/dispensary/items/[id]/route';
 
@@ -34,4 +35,19 @@ test('D-56: an item carries a short note, set on creation, changed or cleared la
   assert.equal((await w.owner.call(itemPatch, { method: 'PATCH', params: { id: peel.id }, body: { note: '  ' } })).status, 200);
   assert.equal(await get(), null, 'a blank note clears it');
   assert.equal((await w.owner.call(itemPatch, { method: 'PATCH', params: { id: peel.id }, body: { note: 'x'.repeat(301) } })).status, 422);
+});
+
+test('D-70: what an item is counted in changes while nothing has moved and it has no packs; never after', async () => {
+  const w = await stockWorld('cnt1');
+  const fresh = await createItem(w.owner, { category: 'MEDICINE', displayName: 'Fresh cnt1', baseUnit: 'TABLET' });
+  const p = (id: string, baseUnit: string) => w.owner.call(itemPatch, { method: 'PATCH', params: { id }, body: { baseUnit } });
+  const ok = await p(fresh.id, 'STRIP');
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.deepEqual([ok.body.baseUnit, ok.body.units.find((u: { isBase: boolean }) => u.isBase).name], ['STRIP', 'strip']);
+  assert.equal((await p(fresh.id, 'ML')).body.code, 'FIELD_INVALID', 'only strip, bottle, tube or unit');
+  assert.equal((await p(w.pcm.id, 'STRIP')).body.code, 'ITEM_HAS_PACKS', 'a strip of 15 tablets hangs off the base');
+  await post(w, [{ type: 'OPENING_BALANCE', itemId: w.glv.id, batchId: null, qtyDelta: 5 }]);
+  const glvBox = (await w.owner.call(itemGet, { params: { id: w.glv.id } })).body.units.find((u: { isBase: boolean }) => !u.isBase);
+  await w.owner.call(unitPatch, { method: 'PATCH', params: { id: w.glv.id, unitId: glvBox.id }, body: { active: false } });
+  assert.equal((await p(w.glv.id, 'UNIT')).body.code, 'ITEM_IDENTITY_LOCKED', 'stock has moved');
 });

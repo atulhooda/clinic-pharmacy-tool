@@ -36,7 +36,9 @@ const CATEGORIES = ['MEDICINE', 'RETAIL_PRODUCT', 'INJECTABLE', 'CONSUMABLE'];
 // What a NEW item may be counted in (032; = lib/stock/items.ts NEW_ITEM_UNITS): strips and bottles, no ml, no piece.
 const BASE_UNITS = ['STRIP', 'BOTTLE', 'TUBE', 'UNIT']; // D-69
 /** The master's suggestion as a unit a new item may use: ml (a liquid) → bottle, piece → unit, anything unknown → tablet. */
-const newItemUnit = (u: string | null): string => (u === 'ML' ? 'BOTTLE' : u === 'PIECE' ? 'UNIT' : u && BASE_UNITS.includes(u) ? u : 'TABLET');
+// D-69: a medicine-list suggestion maps onto strips, bottles, tubes and units (it fell back to tablet).
+const newItemUnit = (u: string | null): string => (u === 'ML' || u === 'BOTTLE' ? 'BOTTLE' : u === 'G' || u === 'TUBE' ? 'TUBE'
+  : u === 'TABLET' || u === 'CAPSULE' || u === 'STRIP' ? 'STRIP' : 'UNIT');
 const FLAGS = ['H', 'H1', 'X', 'G', 'NDPS', 'H2'];
 const USES: UseFor[] = ['PATIENTS', 'IN_CLINIC', 'BOTH'];
 /** D-54: what an item is for when nobody has chosen (the server's default too). */
@@ -361,6 +363,18 @@ export function ItemsPanel({ canEdit, canAdjust, canWriteOff = false }: { canEdi
             </section>
             <TextareaField key={`note-${open.id}`} label={t.note} hint={t.noteHint} defaultValue={open.note ?? ''} maxLength={300} rows={2} disabled={!canEdit}
               onBlur={(e) => { if ((e.target.value.trim() || null) !== open.note) void patch({ note: e.target.value }); }} />
+            {/* D-70: what it is counted in, changeable while nothing has moved and it has no packs. */}
+            {(() => {
+              const packsOn = (open.units ?? []).some((u) => !u.isBase && u.active);
+              const free = canEdit && history.items.length === 0 && !packsOn;
+              return (
+                <SelectField label={t.countedIn} hint={free ? t.countedInHint : history.items.length ? t.countedInLocked : t.countedInPacks}
+                  value={BASE_UNITS.includes(open.baseUnit) ? open.baseUnit : ''} disabled={!free} onChange={(e) => patch({ baseUnit: e.target.value })}>
+                  {!BASE_UNITS.includes(open.baseUnit) && <option value="">{unitName(open.baseUnit)}</option>}
+                  {BASE_UNITS.map((u) => <option key={u} value={u}>{unitName(u)}</option>)}
+                </SelectField>
+              );
+            })()}
             <SelectField label={t.useFor} hint={t.useForHint} value={open.useFor} disabled={!canEdit} onChange={(e) => patch({ useFor: e.target.value })}>
               {USES.map((u) => <option key={u} value={u}>{t.use[u]}</option>)}
             </SelectField>

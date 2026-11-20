@@ -342,9 +342,11 @@ test('E-15 / DX-41: editing changes everything but identity; another organisatio
   const a = await A.owner.call(itemsPost, { body: custom('Editable') });
   const r = await A.owner.call(itemPatch, { method: 'PATCH', body: { displayName: 'Edited', rackLocation: 'R2', reorderLevel: 5 }, params: { id: a.body.id } });
   assert.deepEqual([r.status, r.body.displayName, r.body.rackLocation, r.body.reorderLevel], [200, 'Edited', 'R2', 5]);
-  for (const identity of [{ baseUnit: 'ML' }, { trackBatches: false }, { masterId: NONEXIST }]) {
+  for (const identity of [{ trackBatches: false }, { masterId: NONEXIST }]) {
     assert.equal((await A.owner.call(itemPatch, { method: 'PATCH', body: identity, params: { id: a.body.id } })).body.code, 'UNKNOWN_FIELD');
   }
+  // D-70: the counting unit is editable, but only to a strip, bottle, tube or unit (and only before stock moves).
+  assert.equal((await A.owner.call(itemPatch, { method: 'PATCH', body: { baseUnit: 'ML' }, params: { id: a.body.id } })).body.code, 'FIELD_INVALID');
   const b = await B.owner.call(itemsPost, { body: custom('B item') });
   const cross = await A.owner.call(itemPatch, { method: 'PATCH', body: { displayName: 'Hijacked' }, params: { id: b.body.id } });
   assert.deepEqual([cross.status, cross.body.code], [404, 'ITEM_NOT_FOUND']);

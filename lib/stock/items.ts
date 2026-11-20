@@ -237,12 +237,12 @@ export async function createItem(s: Session, input: ItemCreate): Promise<ItemDet
   return getItem(s, id);
 }
 
-export type ItemPatch = Partial<Omit<ItemCreate, 'masterId' | 'baseUnit' | 'trackBatches'>> & { active?: boolean };
+export type ItemPatch = Partial<Omit<ItemCreate, 'masterId' | 'baseUnit' | 'trackBatches'>> & { active?: boolean; baseUnit?: BaseUnit };
 const PATCH_MAP: Record<keyof ItemPatch, string> = {
   category: 'category', displayName: 'display_name', extraScheduleFlags: 'extra_schedule_flags', requiresPrescription: 'requires_prescription',
   customManufacturerName: 'custom_manufacturer_name', customManufacturerAddress: 'custom_manufacturer_address',
   hsnCodeOverride: 'hsn_code_override', storageCondition: 'storage_condition', reorderLevel: 'reorder_level',
-  reorderQty: 'reorder_qty', rackLocation: 'rack_location', active: 'active', useFor: 'use_for', note: 'note',
+  reorderQty: 'reorder_qty', rackLocation: 'rack_location', active: 'active', useFor: 'use_for', note: 'note', baseUnit: 'base_unit',
 };
 
 /** E-15: everything but the item's identity. */
@@ -252,6 +252,23 @@ export async function patchItem(s: Session, id: string, input: ItemPatch): Promi
     if (!cur) throw notFound();
     const next = { ...cur, ...Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) } as ItemView;
     if (input.displayName !== undefined) next.displayName = input.displayName.trim();
+    // D-70: what the item is counted in may change only while nothing has moved (items_freeze) and no pack is
+    // defined on the old unit (a strip of 10 tablets would silently become 10 strips).
+    if (input.baseUnit !== undefined && input.baseUnit !== cur.baseUnit) {
+      if (!(NEW_ITEM_UNITS as readonly string[]).includes(input.baseUnit)) throw new HttpError(422, 'FIELD_INVALID', 'Count in strips, bottles, tubes or units.', { field: 'baseUnit', rule: 'enum' });
+      if ((await db.rows('SELECT 1 FROM stock_movements WHERE org_id = $1 AND item_id = $2 LIMIT 1', [s.orgId, id])).length) {
+        throw new HttpError(409, 'ITEM_IDENTITY_LOCKED', 'This item already has stock history, so what it is counted in is fixed. Add a pack (e.g. a strip of 10) under Pack units instead.');
+      }
+      if ((await db.rows('SELECT 1 FROM item_units WHERE org_id = $1 AND item_id = $2 AND NOT is_base AND active LIMIT 1', [s.orgId, id])).length) {
+        throw new HttpError(409, 'ITEM_HAS_PACKS', 'Switch off this item\'s packs first: they are measured in the old unit.');
+      }
+      await db.rows('UPDATE items SET base_unit = $3, updated_at = $4 WHERE org_id = $1 AND id = $2', [s.orgId, id, input.baseUnit, now()]);
+      await db.rows('UPDATE item_units SET name = $3 WHERE org_id = $1 AND item_id = $2 AND is_base', [s.orgId, id, input.baseUnit.toLowerCase()]);
+      await writeAudit(db, { orgId: s.orgId, action: 'item.changed', actorLabel: s.name, actorRole: s.roleKey, staffUserId: s.staffUserId,
+        sessionId: s.sid, deviceId: s.deviceId, entityId: id, detail: { fields: ['base_unit'], from: cur.baseUnit.toLowerCase(), to: input.baseUnit.toLowerCase() } });
+      (next as { baseUnit: BaseUnit }).baseUnit = input.baseUnit;
+      (cur as { baseUnit: BaseUnit }).baseUnit = input.baseUnit;
+    }
     if (input.note !== undefined) next.note = input.note?.trim() || null;
     const keys = (Object.keys(PATCH_MAP) as (keyof ItemPatch)[]).filter((k) => input[k] !== undefined
       && JSON.stringify((next as unknown as Record<string, unknown>)[k]) !== JSON.stringify((cur as unknown as Record<string, unknown>)[k]));

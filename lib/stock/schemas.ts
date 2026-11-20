@@ -55,7 +55,8 @@ export const ITEM_CREATE = {
   trackBatches: { type: 'bool', optional: true },
 } as const satisfies Record<string, Rule>;
 
-export const ITEM_PATCH = { ...optional(ITEM_COMMON), active: { type: 'bool', optional: true } } as const satisfies Record<string, Rule>;
+export const ITEM_PATCH = { ...optional(ITEM_COMMON), active: { type: 'bool', optional: true },
+  baseUnit: { type: 'string', pattern: enumPattern(BASE_UNITS), optional: true } } as const satisfies Record<string, Rule>;
 
 export const SUPPLIER = {
   name: { type: 'string', min: 1, max: 120 },
